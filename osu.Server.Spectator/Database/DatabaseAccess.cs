@@ -648,9 +648,14 @@ namespace osu.Server.Spectator.Database
 
         public async Task SetRoomEndDateAsync(MultiplayerRoom room, DateTimeOffset? endDate)
         {
+            // Torii: g0v0's room table is `rooms` (not osu-web's `multiplayer_rooms`).
+            // Called from MultiplayerRoomController when a user joins/leaves a tournament-mode
+            // room — Torii doesn't run tournament rooms (TournamentMode is always false here),
+            // so this is mostly a no-op in practice but the schema rename keeps the build
+            // future-proof if/when tournament support lands.
             var connection = await getConnectionAsync();
 
-            await connection.ExecuteAsync("UPDATE multiplayer_rooms SET ends_at = @EndDate WHERE id = @RoomID", new
+            await connection.ExecuteAsync("UPDATE rooms SET ends_at = @EndDate WHERE id = @RoomID", new
             {
                 RoomID = room.RoomID,
                 EndDate = endDate
@@ -689,12 +694,16 @@ namespace osu.Server.Spectator.Database
 
         public async Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId)
         {
+            // Torii: g0v0 doesn't have osu-web's `multiplayer_score_links` join table.
+            // The (item → score) mapping lives on `score_tokens.playlist_item_id` instead,
+            // and only rows whose `score_id` is non-null have actually been finalised.
             var connection = await getConnectionAsync();
 
             return (await connection.QueryAsync<SoloScore>(
-                "SELECT * FROM `scores` "
-                + "JOIN `multiplayer_score_links` ON `multiplayer_score_links`.`score_id` = `scores`.`id` "
-                + "WHERE `multiplayer_score_links`.`playlist_item_id` = @playlistItemId", new
+                "SELECT `scores`.* FROM `scores` "
+                + "JOIN `score_tokens` ON `score_tokens`.`score_id` = `scores`.`id` "
+                + "WHERE `score_tokens`.`playlist_item_id` = @playlistItemId "
+                + "  AND `score_tokens`.`score_id` IS NOT NULL", new
                 {
                     playlistItemId = playlistItemId
                 }));
@@ -708,10 +717,28 @@ namespace osu.Server.Spectator.Database
 
         public async Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId)
         {
+            // Torii: g0v0 stores per-playlist-item best scores in `playlist_best_scores`
+            // (column `playlist_id`) rather than osu-web's `multiplayer_scores_high`
+            // (column `playlist_item_id`). Column-aliasing in the SELECT lets Dapper map
+            // back into the upstream POCO without us having to maintain a parallel type.
+            //
+            // The g0v0 table doesn't carry `accuracy` / `pp` / `id` / `created_at` /
+            // `updated_at` — they're left at default values on the returned object. The
+            // only consumer (ScoreProcessedSubscriber) just compares `score_id` against
+            // the freshly-submitted score id, so the missing columns are inert.
             var connection = await getConnectionAsync();
 
             return await connection.QuerySingleOrDefaultAsync<multiplayer_scores_high>(
-                "SELECT * FROM `multiplayer_scores_high` WHERE `playlist_item_id` = @playlistItemId AND `user_id` = @userId", new
+                "SELECT "
+                + "  `score_id` AS `id`, "
+                + "  `score_id` AS `score_id`, "
+                + "  `user_id` AS `user_id`, "
+                + "  `playlist_id` AS `playlist_item_id`, "
+                + "  `total_score` AS `total_score`, "
+                + "  `attempts` AS `attempts` "
+                + "FROM `playlist_best_scores` "
+                + "WHERE `playlist_id` = @playlistItemId AND `user_id` = @userId",
+                new
                 {
                     playlistItemId = playlistItemId,
                     userId = userId
@@ -720,18 +747,31 @@ namespace osu.Server.Spectator.Database
 
         public async Task<int> GetUserRankInRoomAsync(long roomId, int userId)
         {
+            // Torii: g0v0's per-room ranking is computed from `playlist_best_scores`.
+            // The semantic upstream wanted ("how many users beat this user's best in
+            // this room") is "1 + count of users in the room with a higher total than
+            // this user's max total". Multi-playlist-item rooms aggregate by user via
+            // SUM, which matches how the daily-challenge / quick-play ranking surfaces
+            // already work on g0v0.
+            //
+            // The osu-web variant additionally filters out restricted / banned users
+            // via `phpbb_users.user_type = 0` + `user_warnings = 0`. On Torii that's
+            // covered separately by the `IsUserRestrictedAsync` gate (admin-side
+            // restriction prevents the user from connecting at all), so we don't
+            // duplicate the filter at query time.
             var connection = await getConnectionAsync();
 
             return await connection.QuerySingleAsync<int>(
-                "WITH `user_score` AS (SELECT `total_score`, `last_score_id` FROM `multiplayer_rooms_high` WHERE `room_id` = @roomId AND `user_id` = @userId) "
-                + "SELECT COUNT(1) + 1 FROM `multiplayer_rooms_high` "
-                + "JOIN `phpbb_users` ON `phpbb_users`.`user_id` = `multiplayer_rooms_high`.`user_id` "
-                + "WHERE `multiplayer_rooms_high`.`room_id` = @roomId "
-                + "AND `multiplayer_rooms_high`.`user_id` != @userId "
-                + "AND `phpbb_users`.`user_type` = 0 "
-                + "AND `phpbb_users`.`user_warnings` = 0 "
-                + "AND (`multiplayer_rooms_high`.`total_score` > (SELECT `total_score` FROM `user_score`) OR "
-                + "(`multiplayer_rooms_high`.`total_score` = (SELECT `total_score` FROM `user_score`) AND `multiplayer_rooms_high`.`last_score_id` < (SELECT `last_score_id` FROM `user_score`)))",
+                "WITH `user_total` AS ( "
+                + "    SELECT COALESCE(SUM(`total_score`), 0) AS total FROM `playlist_best_scores` "
+                + "    WHERE `room_id` = @roomId AND `user_id` = @userId "
+                + ") "
+                + "SELECT 1 + COUNT(*) FROM ( "
+                + "    SELECT `user_id`, SUM(`total_score`) AS user_total FROM `playlist_best_scores` "
+                + "    WHERE `room_id` = @roomId AND `user_id` != @userId "
+                + "    GROUP BY `user_id` "
+                + ") opponents "
+                + "WHERE opponents.user_total > (SELECT total FROM `user_total`)",
                 new
                 {
                     roomId = roomId,
@@ -751,10 +791,18 @@ namespace osu.Server.Spectator.Database
 
         public async Task ToggleUserPresenceAsync(int userId, bool visible)
         {
+            // Torii: g0v0 stores online presence on `lazer_users.is_online` rather than
+            // osu-web's `phpbb_users.user_allow_viewonline`. Both are queried by the same
+            // user-search / friends-online endpoints — flipping this column is what makes
+            // "appears offline" actually appear offline in the website's user lookups.
+            //
+            // The "live currently-connected" signal on Torii is a separate redis key
+            // (`metadata:online:{userId}`) which the metadata hub manages on connect /
+            // disconnect; this column is just the user-controlled visibility preference.
             var connection = await getConnectionAsync();
 
             await connection.ExecuteAsync(
-                "UPDATE `phpbb_users` SET `user_allow_viewonline` = @visible WHERE `user_id` = @userId",
+                "UPDATE `lazer_users` SET `is_online` = @visible WHERE `id` = @userId",
                 new
                 {
                     visible = visible,

@@ -321,6 +321,17 @@ namespace osu.Server.Spectator.Hubs.Metadata
             Debug.Assert(state.Item != null);
 
             await base.CleanUpState(state);
+
+            // Torii: tear down the cross-service presence signals we set up in logLogin.
+            //   1. Drop the `metadata:online:{userId}` redis key so the website /
+            //      admin tooling immediately knows this user is no longer reachable
+            //      via the metadata hub.
+            //   2. Update `lazer_users.last_visit` so profile pages render "last seen X ago"
+            //      correctly even if the client crashes without firing UpdateStatus(Offline).
+            redis.GetDatabase().KeyDelete($"metadata:online:{state.Item.UserId}");
+            using (var db = databaseFactory.GetInstance())
+                await db.OfflineUser(state.Item.UserId);
+
             if (shouldBroadcastPresenceToOtherUsers(state.Item))
                 await broadcastUserPresenceUpdate(state.Item.UserId, null);
             await scoreProcessedSubscriber.UnregisterFromAllMultiplayerRoomsAsync(state.Item.UserId);
