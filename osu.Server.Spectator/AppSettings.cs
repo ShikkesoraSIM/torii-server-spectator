@@ -41,6 +41,41 @@ namespace osu.Server.Spectator
         public static string SharedInteropDomain { get; } = "http://localhost:8080";
         public static string SharedInteropSecret { get; } = string.Empty;
 
+        /// <summary>
+        /// Bearer token used by <see cref="Services.ToriiClientNameResolver"/> to authenticate
+        /// against the Torii server's <c>/api/private/client-versions/torii-hashes</c> endpoint.
+        /// The g0v0 backend rotates this secret independently of the shared-interop one because
+        /// the client-versions registry is exposed to the spectator only — never to osu!web.
+        /// </summary>
+        public static string ClientVersionWebhookSecret { get; } = string.Empty;
+
+        /// <summary>
+        /// HMAC secret used to sign / verify JWTs issued by the Torii (g0v0) backend.
+        /// Required when <see cref="UseLegacyRsaAuth"/> is false (the default for Torii).
+        /// Mirrors g0v0's <c>JWT_SECRET_KEY</c> exactly — both processes must hold the same
+        /// value or every request to the spectator hub fails authentication.
+        /// </summary>
+        public static string JwtSecretKey { get; } = string.Empty;
+
+        /// <summary>
+        /// When true, the spectator validates lazer-client JWTs against the
+        /// <c>oauth-public.key</c> RSA file (osu!web flow). When false (the Torii default),
+        /// it validates HMAC-SHA256 signatures using <see cref="JwtSecretKey"/>. The
+        /// difference matters because g0v0 issues HS256 tokens — it doesn't have access
+        /// to osu!web's RSA private key, and matching public-key infrastructure isn't
+        /// worth running for a single-tenant deploy.
+        /// </summary>
+        public static bool UseLegacyRsaAuth { get; } = true;
+
+        /// <summary>
+        /// OAuth client id assigned to the lazer client by osu!web. Used as the JWT
+        /// <c>aud</c> validation parameter so tokens issued for other clients (osu!web
+        /// itself, the referee panel, etc.) can't authenticate as a lazer connection.
+        /// Defaults to "5" (the lazer client id on osu!web's reference deploy); g0v0
+        /// uses "5" too unless the operator changed it.
+        /// </summary>
+        public static int OsuClientId { get; } = 5;
+
         public static string? SentryDsn { get; }
 
         public static int BanchoBotUserId { get; } = 3;
@@ -95,6 +130,12 @@ namespace osu.Server.Spectator
 
             SharedInteropDomain = Environment.GetEnvironmentVariable("SHARED_INTEROP_DOMAIN") ?? SharedInteropDomain;
             SharedInteropSecret = Environment.GetEnvironmentVariable("SHARED_INTEROP_SECRET") ?? SharedInteropSecret;
+
+            ClientVersionWebhookSecret = Environment.GetEnvironmentVariable("CLIENT_VERSION_WEBHOOK_SECRET") ?? ClientVersionWebhookSecret;
+
+            JwtSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? JwtSecretKey;
+            UseLegacyRsaAuth = bool.TryParse(Environment.GetEnvironmentVariable("USE_LEGACY_RSA_AUTH"), out bool useLegacyRsaAuth) ? useLegacyRsaAuth : UseLegacyRsaAuth;
+            OsuClientId = int.TryParse(Environment.GetEnvironmentVariable("OSU_CLIENT_ID"), out int osuClientId) ? osuClientId : OsuClientId;
 
             SentryDsn = Environment.GetEnvironmentVariable("SENTRY_DSN");
 

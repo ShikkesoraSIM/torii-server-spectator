@@ -3,8 +3,10 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
@@ -51,15 +53,42 @@ namespace osu.Server.Spectator.Authentication
 
         private void configureLazerClientScheme(JwtBearerOptions options)
         {
-            var rsa = getKeyProvider();
+            // Torii: g0v0 issues HS256-signed JWTs (it doesn't hold osu!web's RSA private key).
+            // Operators that point this spectator at upstream osu!web instead can flip
+            // USE_LEGACY_RSA_AUTH=true to fall back to the public-key validation path.
+            SecurityKey signingKey;
+
+            if (AppSettings.UseLegacyRsaAuth)
+            {
+                signingKey = new RsaSecurityKey(getKeyProvider());
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(AppSettings.JwtSecretKey) || AppSettings.JwtSecretKey == "your_jwt_secret_here")
+                {
+                    throw new InvalidOperationException(
+                        "JWT_SECRET_KEY is required when USE_LEGACY_RSA_AUTH is false. "
+                        + "Set it to the same value g0v0 uses to sign access tokens.");
+                }
+
+                signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(AppSettings.JwtSecretKey));
+            }
 
             options.TokenValidationParameters = new TokenValidationParameters
             {
-                IssuerSigningKey = new RsaSecurityKey(rsa),
-                ValidAudience = "5", // should match the client ID assigned to osu! in the osu-web target deploy.
+                IssuerSigningKey = signingKey,
+                ValidateIssuerSigningKey = true,
+                ValidAudience = AppSettings.OsuClientId.ToString(),
+                ValidateAudience = true,
                 // TODO: figure out why this isn't included in the token.
                 ValidateIssuer = false,
-                ValidIssuer = "https://osu.ppy.sh/"
+                ValidIssuer = "https://osu.ppy.sh/",
+                ValidateLifetime = true,
+                // Torii: g0v0 doesn't run NTP-synced precisely with the spectator host, and
+                // tokens are short-lived. 5 minutes of clock skew avoids "token not yet valid"
+                // / "expired by 1s" rejections without meaningfully widening the auth window.
+                ClockSkew = TimeSpan.FromMinutes(5),
+                RequireExpirationTime = true,
             };
 
             options.Events = new JwtBearerEvents
@@ -67,18 +96,63 @@ namespace osu.Server.Spectator.Authentication
                 OnTokenValidated = async context =>
                 {
                     var jwtToken = (JsonWebToken)context.SecurityToken;
-                    int tokenUserId = int.Parse(jwtToken.Subject);
 
-                    using (var db = databaseFactory.GetInstance())
+                    if (!int.TryParse(jwtToken.Subject, out int tokenUserId))
                     {
-                        // check expiry/revocation against database
-                        var userId = await db.GetUserIdFromTokenAsync(jwtToken);
+                        context.Fail("Invalid token format");
+                        return;
+                    }
 
-                        if (userId != tokenUserId)
+                    using var db = databaseFactory.GetInstance();
+
+                    // Resolve the access_token row in the DB. Returns the CURRENT user_id
+                    // (oauth_tokens.user_id), which can diverge from the JWT's sub claim if
+                    // the user was migrated between IDs (account merge / id transfer).
+                    var resolvedUserId = await db.GetUserIdFromTokenAsync(jwtToken);
+
+                    if (resolvedUserId == null)
+                    {
+                        // Token row is gone (revoked or expired) — this is a real auth failure.
+                        loggerFactory.CreateLogger("JsonWebToken").LogInformation("Token revoked or expired");
+                        context.Fail("Token has expired or been revoked");
+                        return;
+                    }
+
+                    if (resolvedUserId != tokenUserId)
+                    {
+                        // The user was migrated to a new id. Trust the DB and rebuild the
+                        // ClaimsPrincipal so every downstream reader of Context.UserIdentifier
+                        // / Identity.Name picks up the new id. Mutating claims in-place isn't
+                        // enough because the JWT handler computes Identity.Name lazily and
+                        // may have cached a value derived from the original sub.
+                        if (context.Principal?.Identity is ClaimsIdentity oldIdentity)
                         {
-                            loggerFactory.CreateLogger("JsonWebToken").LogInformation("Token revoked or expired");
-                            context.Fail("Token has expired or been revoked");
+                            string newId = resolvedUserId.Value.ToString();
+                            var keep = oldIdentity.Claims
+                                                  .Where(c =>
+                                                      c.Type != "sub" &&
+                                                      c.Type != ClaimTypes.NameIdentifier &&
+                                                      c.Type != ClaimTypes.Name)
+                                                  .ToList();
+                            keep.Add(new Claim("sub", newId));
+                            keep.Add(new Claim(ClaimTypes.NameIdentifier, newId));
+                            keep.Add(new Claim(ClaimTypes.Name, newId));
+                            var newIdentity = new ClaimsIdentity(
+                                keep,
+                                oldIdentity.AuthenticationType,
+                                nameType: ClaimTypes.NameIdentifier,
+                                roleType: oldIdentity.RoleClaimType);
+                            context.Principal = new ClaimsPrincipal(newIdentity);
                         }
+
+                        tokenUserId = resolvedUserId.Value;
+                    }
+
+                    // Restriction check happens here (after the principal is correct) so
+                    // restricted users can't slip through by clinging to a pre-migration id.
+                    if (await db.IsUserRestrictedAsync(tokenUserId))
+                    {
+                        context.Fail("User account is restricted");
                     }
                 },
             };

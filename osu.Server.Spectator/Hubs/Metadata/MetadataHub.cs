@@ -20,6 +20,8 @@ using osu.Server.Spectator.Database.Models;
 using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Extensions;
 using osu.Server.Spectator.Hubs.Spectator;
+using osu.Server.Spectator.Services;
+using StackExchange.Redis;
 using BeatmapUpdates = osu.Game.Online.Metadata.BeatmapUpdates;
 
 namespace osu.Server.Spectator.Hubs.Metadata
@@ -32,6 +34,25 @@ namespace osu.Server.Spectator.Hubs.Metadata
         private readonly IDailyChallengeUpdater dailyChallengeUpdater;
         private readonly IScoreProcessedSubscriber scoreProcessedSubscriber;
 
+        // Torii: cached map of "version hash → friendly client name (e.g. 'Torii Lazer')".
+        // Resolved on every presence broadcast so other lazer clients can render a verified
+        // badge next to your name. Refreshes itself in the background (see ToriiClientNameResolver),
+        // so the lookup here is a constant-time dictionary read, not a network hop.
+        private readonly ToriiClientNameResolver toriiClientNameResolver;
+
+        // Torii: redis is used for cross-service presence (the g0v0 web/admin tooling reads
+        // metadata:online:{userId} to figure out whether a user is currently connected to the
+        // metadata hub without having to talk to SignalR directly). The key is set on connect
+        // with a 2h TTL — long enough to survive a momentary disconnect, short enough to
+        // self-clean if the spectator process disappears without firing OnDisconnectedAsync.
+        private readonly IConnectionMultiplexer redis;
+
+        // Torii: raw IHubContext used for the custom UserClientNameUpdated SignalR event.
+        // The osu! lazer client subscribes to it via `connection.On<int, string?>("UserClientNameUpdated", ...)`
+        // (see osu.Game.Online.Metadata.OnlineMetadataClient), but the IMetadataClient interface
+        // upstream doesn't include the method, so we have to dispatch by name with raw SendAsync.
+        private readonly IHubContext<MetadataHub> hubContext;
+
         internal const string ONLINE_PRESENCE_WATCHERS_GROUP = "metadata:online-presence-watchers";
         internal static string FRIEND_PRESENCE_WATCHERS_GROUP(int userId) => $"metadata:online-presence-watchers:{userId}";
 
@@ -43,13 +64,19 @@ namespace osu.Server.Spectator.Hubs.Metadata
             EntityStore<MetadataClientState> userStates,
             IDatabaseFactory databaseFactory,
             IDailyChallengeUpdater dailyChallengeUpdater,
-            IScoreProcessedSubscriber scoreProcessedSubscriber)
+            IScoreProcessedSubscriber scoreProcessedSubscriber,
+            ToriiClientNameResolver toriiClientNameResolver,
+            IConnectionMultiplexer redis,
+            IHubContext<MetadataHub> hubContext)
             : base(loggerFactory, userStates)
         {
             this.cache = cache;
             this.databaseFactory = databaseFactory;
             this.dailyChallengeUpdater = dailyChallengeUpdater;
             this.scoreProcessedSubscriber = scoreProcessedSubscriber;
+            this.toriiClientNameResolver = toriiClientNameResolver;
+            this.redis = redis;
+            this.hubContext = hubContext;
         }
 
         public override async Task OnConnectedAsync()
@@ -75,8 +102,15 @@ namespace osu.Server.Spectator.Hubs.Metadata
                 // fallback to getting the raw IP.
                 : Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString();
 
+            // Torii: signal "this user has an active metadata connection" to the rest of the
+            // stack via a redis key. The g0v0 backend reads this when answering /me requests
+            // so the website can show a "currently online" badge without re-implementing
+            // SignalR group introspection. 2h TTL self-cleans if the spectator dies without
+            // firing OnDisconnectedAsync.
+            redis.GetDatabase().StringSet($"metadata:online:{usage.Item!.UserId}", "metadata", TimeSpan.FromHours(2));
+
             using (var db = databaseFactory.GetInstance())
-                await db.AddLoginForUserAsync(usage.Item!.UserId, userIp);
+                await db.AddLoginForUserAsync(usage.Item.UserId, userIp);
         }
 
         public async Task<BeatmapUpdates> GetChangesSince(int queueId)
@@ -90,7 +124,18 @@ namespace osu.Server.Spectator.Hubs.Metadata
             foreach (var userState in GetAllStates())
             {
                 if (userState.Value.UserStatus != UserStatus.Offline)
+                {
                     await Clients.Caller.UserPresenceUpdated(userState.Value.UserId, userState.Value.ToUserPresence());
+
+                    // Torii: also seed the caller's verified-client-name table for everyone
+                    // currently online. Without this, the caller wouldn't see badges until
+                    // each peer's next presence update — fine over time, awkward right after
+                    // connecting. Sent via the raw IHubContext (rather than Clients.Caller)
+                    // because UserClientNameUpdated is a custom SignalR event not on the
+                    // strongly-typed IMetadataClient interface.
+                    string? clientName = toriiClientNameResolver.Resolve(userState.Value.VersionHash);
+                    await hubContext.Clients.Client(Context.ConnectionId).SendAsync("UserClientNameUpdated", userState.Value.UserId, clientName);
+                }
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, ONLINE_PRESENCE_WATCHERS_GROUP);
@@ -278,15 +323,28 @@ namespace osu.Server.Spectator.Hubs.Metadata
             await scoreProcessedSubscriber.UnregisterFromAllMultiplayerRoomsAsync(state.Item.UserId);
         }
 
-        private Task broadcastUserPresenceUpdate(int userId, UserPresence? userPresence)
+        private async Task broadcastUserPresenceUpdate(int userId, UserPresence? userPresence)
         {
             // we never want appearing offline users to have their status broadcast to other clients.
             Debug.Assert(userPresence?.Status != UserStatus.Offline);
 
-            return Task.WhenAll
+            // Torii: alongside every presence update, broadcast the verified-Torii client name
+            // (or null for vanilla / unverified clients). Receivers stash it in a side-table
+            // so the username chip can render the "Torii" badge next to verified players.
+            // The version hash that drives the lookup lives on MetadataClientState and was
+            // captured during OnConnectedAsync.
+            string? versionHash = null;
+            using (var stateUsage = await TryGetStateFromUser(userId))
+                versionHash = stateUsage?.Item?.VersionHash;
+
+            string? clientName = toriiClientNameResolver.Resolve(versionHash);
+
+            await Task.WhenAll
             (
                 Clients.Group(ONLINE_PRESENCE_WATCHERS_GROUP).UserPresenceUpdated(userId, userPresence),
-                Clients.Group(FRIEND_PRESENCE_WATCHERS_GROUP(userId)).FriendPresenceUpdated(userId, userPresence)
+                Clients.Group(FRIEND_PRESENCE_WATCHERS_GROUP(userId)).FriendPresenceUpdated(userId, userPresence),
+                hubContext.Clients.Group(ONLINE_PRESENCE_WATCHERS_GROUP).SendAsync("UserClientNameUpdated", userId, clientName),
+                hubContext.Clients.Group(FRIEND_PRESENCE_WATCHERS_GROUP(userId)).SendAsync("UserClientNameUpdated", userId, clientName)
             );
         }
 

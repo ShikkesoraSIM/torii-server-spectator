@@ -150,6 +150,19 @@ namespace osu.Server.Spectator.Hubs.Spectator
             }
         }
 
+        // Total time we'll wait for the g0v0 score handler to link the score_token row to its
+        // newly-created score row (process_score's first commit). 30ms is typical, but a slow
+        // DB / contended commit can push it longer — anything past ~750ms is almost certainly
+        // a real failure rather than a race we can win by waiting. Tuned so we cover the
+        // realistic worst case without holding the hub thread.
+        //
+        // This retry exists because the lazer client fires EndPlaySession immediately after
+        // submitScore, so the spectator can race the g0v0 /scores POST handler on Torii. The
+        // upstream (osu-web) flow is heavier and rarely loses this race; on Torii it's been
+        // observed often enough that without the retry the rank/PP popup silently never fires.
+        private const int register_for_single_score_max_wait_ms = 750;
+        private const int register_for_single_score_retry_delay_ms = 60;
+
         public async Task RegisterForSingleScoreAsync(string receiverConnectionId, int userId, long scoreToken)
         {
             try
@@ -158,10 +171,29 @@ namespace osu.Server.Spectator.Hubs.Spectator
 
                 SoloScore? score = await db.GetScoreFromTokenAsync(scoreToken);
 
+                int waitedMs = 0;
+                while (score == null && waitedMs < register_for_single_score_max_wait_ms)
+                {
+                    await Task.Delay(register_for_single_score_retry_delay_ms);
+                    waitedMs += register_for_single_score_retry_delay_ms;
+                    score = await db.GetScoreFromTokenAsync(scoreToken);
+                }
+
                 if (score == null)
                 {
+                    logger.LogWarning(
+                        "Score still not linked to token {scoreToken} after {waitedMs}ms — dropping single-score subscription for user {userId}. " +
+                        "This means the rank/PP popup won't fire for this play.",
+                        scoreToken, waitedMs, userId);
                     DogStatsd.Increment($"{statsd_prefix}.subscriptions.single-score.dropped");
                     return;
+                }
+
+                if (waitedMs > 0)
+                {
+                    logger.LogInformation(
+                        "Score row appeared after {waitedMs}ms wait for token {scoreToken} (score id {scoreId}, user {userId}).",
+                        waitedMs, scoreToken, score.id, userId);
                 }
 
                 var subscription = new SingleScoreSubscription(receiverConnectionId, userId, (long)score.id, spectatorHubContext);

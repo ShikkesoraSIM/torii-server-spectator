@@ -30,7 +30,12 @@ namespace osu.Server.Spectator.Extensions
                                     .AddSingleton<EntityStore<RefereeClientState>>()
                                     .AddSingleton<GracefulShutdownManager>()
                                     .AddSingleton<MetadataBroadcaster>()
-                                    .AddSingleton<IScoreStorage, S3ScoreStorage>()
+                                    // Torii: replays land on the local filesystem under
+                                    // AppSettings.ReplaysPath (`/app/replays` inside the container,
+                                    // bind-mounted from `spectator-m1pp/replays` on the host).
+                                    // We don't run any S3-compatible object store on the Torii VPS,
+                                    // so the upstream-default S3ScoreStorage stays unused.
+                                    .AddSingleton<IScoreStorage, FileScoreStorage>()
                                     .AddSingleton<ScoreUploader>()
                                     .AddSingleton<IScoreProcessedSubscriber, ScoreProcessedSubscriber>()
                                     .AddSingleton<BuildUserCountUpdater>()
@@ -41,7 +46,15 @@ namespace osu.Server.Spectator.Extensions
                                     .AddSingleton<IMatchmakingQueueBackgroundService, MatchmakingQueueBackgroundService>()
                                     .AddHostedService<IMatchmakingQueueBackgroundService>(ctx => ctx.GetRequiredService<IMatchmakingQueueBackgroundService>())
                                     .AddSingleton<IMultiplayerRoomController, MultiplayerRoomController>()
-                                    .AddHostedService<MultiplayerRoomLifetimeBackgroundService>();
+                                    .AddHostedService<MultiplayerRoomLifetimeBackgroundService>()
+                                    // Torii client-version verification: pulls the trusted-hash
+                                    // list from g0v0's /api/private/client-versions/torii-hashes
+                                    // endpoint at startup + every 15 min, caches it in-memory so
+                                    // the metadata hub can label every connection with the build
+                                    // it's running (or `null` for unverified clients) without a
+                                    // per-presence DB hit.
+                                    .AddSingleton<ToriiClientNameResolver>()
+                                    .AddHostedService<ToriiClientNameResolver>(ctx => ctx.GetRequiredService<ToriiClientNameResolver>());
         }
 
         /// <summary>
