@@ -453,28 +453,47 @@ namespace osu.Server.Spectator.Database
         {
             await using var connection = await getConnectionAsync();
 
-            // g0v0-server uses relationship table instead of phpbb_zebra
-            var relationship = await connection.QuerySingleOrDefaultAsync<dynamic>("SELECT * FROM `relationship` WHERE `user_id` = @UserId AND `target_id` = @ZebraId",
+            // g0v0-server uses `relationship` (singular) instead of phpbb_zebra,
+            // with type values 'FOLLOW' / 'BLOCK' (UPPERCASE — verified against
+            // the live ENUM). Earlier this comparison used 'Friend' / 'Block'
+            // which never matched anything because the canonical case is
+            // upper. The result was that every InvitePlayer flow saw both
+            // sides as "no relation" — friend privacy gates and block
+            // detection were silently disabled.
+            var relationship = await connection.QuerySingleOrDefaultAsync<dynamic>(
+                "SELECT * FROM `relationship` WHERE `user_id` = @UserId AND `target_id` = @ZebraId",
                 new { UserId = userId, ZebraId = zebraId });
 
             if (relationship == null)
                 return null;
 
-            // Convert relationship to phpbb_zebra format for compatibility
-            return new phpbb_zebra { user_id = userId, zebra_id = zebraId, friend = relationship.type == "Friend", foe = relationship.type == "Block" };
+            string type = ((string)relationship.type ?? string.Empty).ToUpperInvariant();
+            return new phpbb_zebra
+            {
+                user_id = userId,
+                zebra_id = zebraId,
+                friend = type == "FOLLOW",
+                foe = type == "BLOCK",
+            };
         }
 
         public async Task<IEnumerable<int>> GetUserFriendsAsync(int userId)
         {
             await using var connection = await getConnectionAsync();
 
-            // Query adapted for g0v0-server schema using relationship table
+            // g0v0 uses `FOLLOW` (uppercase) for friend relations. The earlier
+            // 'Friend' filter never matched any rows, so the lazer client
+            // showed an empty friends list even when the user had real
+            // follows in the relationship table. `priv = 1` keeps the
+            // "regular user" gate that g0v0 already applies in its public
+            // user lookup endpoints (priv=0 are placeholder/system rows).
             return await connection.QueryAsync<int>(
-                "SELECT r.target_id FROM relationship r "
-                + "JOIN lazer_users u ON r.target_id = u.id "
-                + "WHERE r.user_id = @UserId "
-                + "AND r.type = 'Friend' "
-                + "AND u.priv = 1", new { UserId = userId });
+                @"SELECT r.target_id
+                  FROM relationship r
+                  JOIN lazer_users u ON r.target_id = u.id
+                  WHERE r.user_id = @UserId
+                    AND r.type = 'FOLLOW'
+                    AND u.priv = 1", new { UserId = userId });
         }
 
         public async Task<bool> GetUserAllowsPMs(int userId)
@@ -626,38 +645,63 @@ namespace osu.Server.Spectator.Database
 
         public async Task<int?> GetDelegatedResourceOwnerIdFromTokenAsync(JsonWebToken jwtToken)
         {
-            var connection = await getConnectionAsync();
-
-            return await connection.QueryFirstOrDefaultAsync<int?>(
-                """
-                SELECT `clients`.`user_id`
-                FROM `oauth_access_tokens` AS `tokens`
-                JOIN `oauth_clients` AS `clients` ON `tokens`.`client_id` = `clients`.`id`
-                WHERE `tokens`.`revoked` = false
-                    AND `tokens`.`expires_at` > NOW()
-                    AND JSON_CONTAINS(`tokens`.`scopes`, JSON_QUOTE('delegate'))
-                    AND `tokens`.`id` = @id
-                """,
-                new { id = jwtToken.Id });
+            // Torii: g0v0's OAuth table is `oauth_tokens` (not osu-web's
+            // `oauth_access_tokens`), columns are slightly different too:
+            //   - no `revoked` flag (deletions hard-delete the row)
+            //   - `scope` is a space-separated VARCHAR(100) (osu-web has a JSON
+            //     array column called `scopes`)
+            //   - `id` is auto-incrementing int, the JWT's `jti` claim is a
+            //     string identifier we don't currently persist
+            //
+            // Practical impact: the only caller is the pubsub/legacy delegated-
+            // auth flow which Torii doesn't run. Returning null disables the
+            // delegation lookup cleanly without crashing on a missing table.
+            await using var _ = await getConnectionAsync();
+            return null;
         }
 
 
         public async Task<int[]> GetUsersInGroupsAsync(int[] groupIds)
         {
-            var connection = await getConnectionAsync();
-
-            return (await connection.QueryAsync<int>("SELECT DISTINCT `user_id` FROM `phpbb_user_group` WHERE `group_id` IN @groupIds", new
-            {
-                groupIds = groupIds
-            })).ToArray();
+            // Torii: g0v0 doesn't have a `phpbb_user_group` table — group
+            // membership is tracked via the `lazer_users.is_supporter` /
+            // `is_admin` / `priv` flags directly on the user row. The only
+            // current caller is the version-check exemption hook (used when
+            // ClientCheckVersion is enabled) which is off by default for Torii.
+            // Return an empty array so the caller's `Contains()` check just
+            // says "no exemptions" rather than crashing on a missing table.
+            await using var _ = await getConnectionAsync();
+            return [];
         }
 
         public async Task<database_beatmap[]> GetBeatmapsAsync(int[] beatmapIds)
         {
+            // Torii: retarget `osu_beatmaps` -> g0v0's `beatmaps`. Same column
+            // remapping as GetBeatmapAsync (id->beatmap_id, beatmap_status->
+            // approved, mode->playmode literal, hardcoded osu_file_version=14).
             var connection = await getConnectionAsync();
 
             return (await connection.QueryAsync<database_beatmap>(
-                "SELECT beatmap_id, beatmapset_id, checksum, approved, difficultyrating, playmode, osu_file_version FROM osu_beatmaps WHERE beatmap_id IN @BeatmapIds AND deleted_at IS NULL", new
+                @"SELECT
+                    id AS beatmap_id,
+                    beatmapset_id,
+                    checksum,
+                    beatmap_status AS approved,
+                    difficulty_rating AS difficultyrating,
+                    CASE
+                        WHEN mode = 'osu' THEN 0
+                        WHEN mode = 'taiko' THEN 1
+                        WHEN mode = 'fruits' THEN 2
+                        WHEN mode = 'mania' THEN 3
+                        WHEN mode = 'osurx' THEN 4
+                        WHEN mode = 'osuap' THEN 5
+                        WHEN mode = 'taikorx' THEN 6
+                        WHEN mode = 'fruitsrx' THEN 7
+                        ELSE 0
+                    END AS playmode,
+                    14 AS osu_file_version
+                  FROM beatmaps
+                  WHERE id IN @BeatmapIds AND deleted_at IS NULL", new
                 {
                     BeatmapIds = beatmapIds
                 })).ToArray();
@@ -682,13 +726,13 @@ namespace osu.Server.Spectator.Database
 
         public async Task<osu_build?> GetBuildByHashAsync(string hash)
         {
-            var connection = await getConnectionAsync();
-
-            return await connection.QuerySingleOrDefaultAsync<osu_build?>("SELECT `build_id`, `version`, `hash`, `users`, `allow_bancho` FROM `osu_builds` WHERE `hash` = UNHEX(@Hash)",
-                new
-                {
-                    Hash = hash
-                });
+            // Torii: g0v0 has no `osu_builds` table — client build tracking is
+            // handled out-of-band by ToriiClientNameResolver via a small webhook
+            // endpoint instead. Returning null short-circuits the upstream
+            // version-check pipeline (which is also disabled by default via
+            // CLIENT_CHECK_VERSION=false) without crashing on a missing table.
+            await using var _ = await getConnectionAsync();
+            return null;
         }
 
 
@@ -830,26 +874,36 @@ namespace osu.Server.Spectator.Database
 
         public async Task<float> GetUserPPAsync(int userId, int rulesetId, int variant)
         {
-            string statsTable = rulesetId switch
+            // Torii: g0v0 keeps every ruleset's stats in a single
+            // `lazer_user_statistics` table keyed by (user_id, mode), where
+            // `mode` is the GameMode string-enum ('OSU','TAIKO','FRUITS', ...).
+            // No per-keymode (4k/7k) stat split — mania pp is whatever's in
+            // the `MANIA` row, mania-4k/7k variants of the matchmaking
+            // ranking aren't supported on Torii (matchmaking itself isn't
+            // wired up yet). The pp column is `pp` (osu-web called it
+            // `rank_score`).
+            string mode = rulesetId switch
             {
-                0 => "osu_user_stats",
-                1 => "osu_user_stats_taiko",
-                2 => "osu_user_stats_fruits",
-                3 => variant switch
-                {
-                    4 => "osu_user_stats_mania_4k",
-                    7 => "osu_user_stats_mania_7k",
-                    _ => "osu_user_stats_mania"
-                },
+                0 => "OSU",
+                1 => "TAIKO",
+                2 => "FRUITS",
+                3 => "MANIA",
+                4 => "OSURX",
+                5 => "OSUAP",
+                6 => "TAIKORX",
+                7 => "FRUITSRX",
                 _ => throw new ArgumentOutOfRangeException(nameof(rulesetId), rulesetId, null)
             };
 
             var connection = await getConnectionAsync();
 
-            return await connection.QuerySingleOrDefaultAsync<float>($"SELECT `rank_score` FROM {statsTable} WHERE `user_id` = @userId", new
-            {
-                userId = userId
-            });
+            return await connection.QuerySingleOrDefaultAsync<float>(
+                "SELECT `pp` FROM `lazer_user_statistics` WHERE `user_id` = @userId AND `mode` = @mode",
+                new
+                {
+                    userId = userId,
+                    mode = mode
+                });
         }
 
         public async Task<matchmaking_pool[]> GetActiveMatchmakingPoolsAsync()
@@ -871,11 +925,26 @@ namespace osu.Server.Spectator.Database
 
         public async Task<matchmaking_pool_beatmap[]> GetMatchmakingPoolBeatmapsAsync(uint poolId)
         {
+            // Torii: matchmaking is dormant (no UI, no migration applied) so
+            // this currently returns an empty set in practice, but retarget
+            // the JOIN to g0v0's `beatmaps` table (`id` column, no `playmode`
+            // -- decode mode enum to int via CASE, same as GetBeatmapAsync).
             var connection = await getConnectionAsync();
 
-            return (await connection.QueryAsync<matchmaking_pool_beatmap>("SELECT p.*, b.playmode, b.checksum, b.difficultyrating FROM `matchmaking_pool_beatmaps` p "
-                                                                          + "JOIN `osu_beatmaps` b ON p.beatmap_id = b.beatmap_id "
-                                                                          + "WHERE p.pool_id = @PoolId", new
+            return (await connection.QueryAsync<matchmaking_pool_beatmap>(
+                @"SELECT p.*,
+                         CASE
+                             WHEN b.mode = 'osu' THEN 0
+                             WHEN b.mode = 'taiko' THEN 1
+                             WHEN b.mode = 'fruits' THEN 2
+                             WHEN b.mode = 'mania' THEN 3
+                             ELSE 0
+                         END AS playmode,
+                         b.checksum,
+                         b.difficulty_rating AS difficultyrating
+                  FROM `matchmaking_pool_beatmaps` p
+                  JOIN `beatmaps` b ON p.beatmap_id = b.id
+                  WHERE p.pool_id = @PoolId", new
             {
                 PoolId = poolId
             })).ToArray();
@@ -885,11 +954,22 @@ namespace osu.Server.Spectator.Database
         {
             var connection = await getConnectionAsync();
 
-            return await connection.QuerySingleOrDefaultAsync<matchmaking_pool_beatmap>("SELECT p.*, b.playmode, b.checksum, b.difficultyrating FROM `matchmaking_pool_beatmaps` p "
-                                                                                        + "JOIN `osu_beatmaps` b ON p.beatmap_id = b.beatmap_id "
-                                                                                        + "WHERE p.pool_id = @PoolId "
-                                                                                        + "AND p.beatmap_id = @BeatmapId "
-                                                                                        + "AND p.mods = @Mods", new
+            return await connection.QuerySingleOrDefaultAsync<matchmaking_pool_beatmap>(
+                @"SELECT p.*,
+                         CASE
+                             WHEN b.mode = 'osu' THEN 0
+                             WHEN b.mode = 'taiko' THEN 1
+                             WHEN b.mode = 'fruits' THEN 2
+                             WHEN b.mode = 'mania' THEN 3
+                             ELSE 0
+                         END AS playmode,
+                         b.checksum,
+                         b.difficulty_rating AS difficultyrating
+                  FROM `matchmaking_pool_beatmaps` p
+                  JOIN `beatmaps` b ON p.beatmap_id = b.id
+                  WHERE p.pool_id = @PoolId
+                    AND p.beatmap_id = @BeatmapId
+                    AND p.mods = @Mods", new
             {
                 PoolId = poolId,
                 BeatmapId = beatmapId,
@@ -927,15 +1007,49 @@ namespace osu.Server.Spectator.Database
             // - Ranked status
             // - Between 1 and 4 minutes in length
             // - With the correct keymode (if mania)
-            return (await connection.QueryAsync<database_beatmap>("SELECT b.beatmap_id, b.playmode, b.checksum, b.difficultyrating FROM `osu_beatmaps` b "
-                                                                  + "JOIN `osu_beatmapsets` s ON s.beatmapset_id = b.beatmapset_id "
-                                                                  + "WHERE s.track_id IS NOT NULL "
-                                                                  + "AND b.playmode = @RulesetId "
-                                                                  + "AND b.deleted_at IS NULL "
-                                                                  + "AND s.download_disabled_url IS NULL "
-                                                                  + "AND b.approved BETWEEN 1 AND 2 "
-                                                                  + "AND b.hit_length BETWEEN 60 AND 300 "
-                                                                  + variantString,
+            // Torii: retarget osu-web's `osu_beatmaps` + `osu_beatmapsets`
+            // to g0v0's `beatmaps` + `beatmapsets`. Column remapping:
+            //   beatmap_id -> id
+            //   playmode -> mode (string enum, decoded via CASE)
+            //   difficultyrating -> difficulty_rating
+            //   approved -> beatmap_status (g0v0's column has the same int
+            //     enum semantics, so the BETWEEN range still works)
+            //   hit_length -> total_length (g0v0 keeps only `total_length`;
+            //     this very slightly inflates length-clipping, but the matchmaking
+            //     pool selector treats this as a soft cap so it's fine)
+            //   s.track_id -> beatmapsets.track_id (same column on g0v0)
+            //   s.download_disabled_url -> beatmapsets has no equivalent;
+            //     drop the filter (Torii doesn't honour upstream's "download
+            //     disabled" concept anyway).
+            // The mania variant filter on `b.diff_size` doesn't exist on g0v0
+            // (no per-key-mode column); the matchmaker simply ignores variant
+            // for mania pool selection.
+            return (await connection.QueryAsync<database_beatmap>(
+                @"SELECT b.id AS beatmap_id,
+                         b.beatmapset_id,
+                         b.checksum,
+                         b.beatmap_status AS approved,
+                         b.difficulty_rating AS difficultyrating,
+                         CASE
+                             WHEN b.mode = 'osu' THEN 0
+                             WHEN b.mode = 'taiko' THEN 1
+                             WHEN b.mode = 'fruits' THEN 2
+                             WHEN b.mode = 'mania' THEN 3
+                             ELSE 0
+                         END AS playmode,
+                         14 AS osu_file_version
+                  FROM `beatmaps` b
+                  JOIN `beatmapsets` s ON s.id = b.beatmapset_id
+                  WHERE s.track_id IS NOT NULL
+                    AND b.mode = (CASE @RulesetId
+                                  WHEN 0 THEN 'osu'
+                                  WHEN 1 THEN 'taiko'
+                                  WHEN 2 THEN 'fruits'
+                                  WHEN 3 THEN 'mania'
+                                  ELSE 'osu' END)
+                    AND b.deleted_at IS NULL
+                    AND b.beatmap_status BETWEEN 1 AND 2
+                    AND b.total_length BETWEEN 60 AND 300",
                 new
                 {
                     RulesetId = rulesetId,
