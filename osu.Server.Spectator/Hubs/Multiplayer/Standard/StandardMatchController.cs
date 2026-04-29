@@ -160,7 +160,12 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
 
             using (var db = dbFactory.GetInstance())
             {
-                var beatmap = await db.GetBeatmapAsync(item.BeatmapID);
+                // Torii: use the OrFetch variant so adding a map that g0v0
+                // hasn't cached yet (any map nobody on this server has played)
+                // bootstraps the `beatmaps` row via _lio/beatmaps/ensure first.
+                // Without this, the AddPlaylistItem INSERT would trip the
+                // `room_playlists.beatmap_id -> beatmaps.id` FK and 500.
+                var beatmap = await db.GetBeatmapOrFetchAsync(item.BeatmapID);
 
                 if (beatmap == null)
                     throw new InvalidStateException("Attempted to add a beatmap which does not exist online.");
@@ -191,7 +196,10 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
 
             using (var db = dbFactory.GetInstance())
             {
-                var beatmap = await db.GetBeatmapAsync(item.BeatmapID);
+                // Torii: same auto-fetch as AddPlaylistItem above. EditPlaylistItem
+                // changes the beatmap on an existing slot, so the new beatmap may
+                // also be one g0v0 hasn't seen yet.
+                var beatmap = await db.GetBeatmapOrFetchAsync(item.BeatmapID);
 
                 if (beatmap == null)
                     throw new InvalidStateException("Attempted to add a beatmap which does not exist online.");
