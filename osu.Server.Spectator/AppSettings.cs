@@ -53,6 +53,17 @@ namespace osu.Server.Spectator
         /// </summary>
         public static string DatabasePassword { get; } = string.Empty;
 
+        /// <summary>
+        /// Torii: gate for upstream's <c>BeatmapStatusWatcher</c>, which polls
+        /// osu-web's <c>bss_process_queue</c> table to broadcast newly-processed
+        /// beatmap-set updates. g0v0 doesn't have that table (its beatmap
+        /// pipeline writes directly to <c>beatmaps</c> + uses redis pub/sub for
+        /// updates), so the poller throws "table not found" on every tick.
+        /// Defaults to <c>false</c> for Torii deploys; flip to true when running
+        /// against a real osu-web schema.
+        /// </summary>
+        public static bool EnableBeatmapStatusPolling { get; } = false;
+
         public static string SharedInteropDomain { get; } = "http://localhost:8080";
         public static string SharedInteropSecret { get; } = string.Empty;
 
@@ -144,6 +155,7 @@ namespace osu.Server.Spectator
             DatabasePort = int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out int databasePort) ? databasePort : DatabasePort;
             DatabaseName = Environment.GetEnvironmentVariable("DB_NAME") ?? DatabaseName;
             DatabasePassword = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? DatabasePassword;
+            EnableBeatmapStatusPolling = bool.TryParse(Environment.GetEnvironmentVariable("ENABLE_BEATMAP_STATUS_POLLING"), out bool enableBeatmapStatusPolling) ? enableBeatmapStatusPolling : EnableBeatmapStatusPolling;
 
             SharedInteropDomain = Environment.GetEnvironmentVariable("SHARED_INTEROP_DOMAIN") ?? SharedInteropDomain;
             SharedInteropSecret = Environment.GetEnvironmentVariable("SHARED_INTEROP_SECRET") ?? SharedInteropSecret;

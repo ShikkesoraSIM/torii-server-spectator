@@ -23,7 +23,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
 
         private readonly ILogger logger;
 
-        private readonly IDisposable poller;
+        private readonly IDisposable? poller;
 
         public MetadataBroadcaster(
             ILoggerFactory loggerFactory,
@@ -34,7 +34,15 @@ namespace osu.Server.Spectator.Hubs.Metadata
             this.metadataHubContext = metadataHubContext;
 
             logger = loggerFactory.CreateLogger(nameof(MetadataBroadcaster));
-            poller = BeatmapStatusWatcher.StartPollingAsync(handleUpdates, 5000).Result;
+
+            // Torii: BeatmapStatusWatcher polls osu-web's bss_process_queue table,
+            // which g0v0 doesn't have. Gate the poller on AppSettings so vanilla
+            // osu-web deploys keep working but Torii deploys don't crash on every
+            // tick with "table 'bss_process_queue' doesn't exist". g0v0 publishes
+            // beatmap updates via redis pub/sub instead — wired up separately if
+            // we ever want client-broadcast on updates.
+            if (AppSettings.EnableBeatmapStatusPolling)
+                poller = BeatmapStatusWatcher.StartPollingAsync(handleUpdates, 5000).Result;
         }
 
         // ReSharper disable once AsyncVoidMethod
@@ -51,7 +59,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
 
         public void Dispose()
         {
-            poller.Dispose();
+            poller?.Dispose();
         }
     }
 }

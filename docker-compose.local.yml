@@ -64,13 +64,27 @@ services:
 
       # ─── Network (shared g0v0 stack) ─────────────────────────────────
       - REDIS_HOST=redis
+      # Two flavours of DB env vars on purpose:
+      #   - DB_*   : read by our (Torii) DatabaseAccess via AppSettings
+      #   - MYSQL_*: read by the upstream `ppy.osu.Server.OsuQueueProcessor`
+      #              package (BeatmapStatusWatcher etc) which has its own
+      #              env-var convention. Prod's compose sets both for the
+      #              same reason — keep them in sync.
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=osu_api
       - DB_NAME=osu_api
-      # Password comes from .env.local (DB_PASSWORD). Leaving it empty
-      # makes DatabaseAccess omit the Password= clause entirely, which is
-      # what you want if you've configured MySQL with no password locally.
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=osu_api
+      - MYSQL_DATABASE=osu_api
+      # Passwords come from .env.local (DB_PASSWORD + MYSQL_PASSWORD).
+      # Local g0v0 stack uses "password" (matches docker-compose default).
+
+      # Torii: g0v0 doesn't have osu-web's `bss_process_queue` table, so the
+      # MetadataBroadcaster poller is off by default. Flip to true only when
+      # running against a real osu-web-shaped DB.
+      - ENABLE_BEATMAP_STATUS_POLLING=false
 
       # ─── Auth ─────────────────────────────────────────────────────────
       # Critical: JWT_SECRET_KEY MUST match g0v0-server's .env value or
