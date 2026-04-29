@@ -3,7 +3,7 @@
 
 using System.Threading.Tasks;
 using osu.Game.Online.Multiplayer;
-using osu.Server.Spectator.Hubs.Referee;
+using System.IO;
 
 namespace osu.Server.Spectator.Services
 {
@@ -17,9 +17,8 @@ namespace osu.Server.Spectator.Services
         /// </remarks>
         /// <param name="hostUserId">The ID of the user that wants to create the room.</param>
         /// <param name="room">The room.</param>
-        /// <param name="tournamentMode">Used by <see cref="RefereeHub"/> to exercise less stringent limits on number of simultaneously active rooms.</param>
         /// <returns>The room's ID.</returns>
-        Task<long> CreateRoomAsync(int hostUserId, MultiplayerRoom room, bool tournamentMode = false);
+        Task<long> CreateRoomAsync(int hostUserId, MultiplayerRoom room);
 
         /// <summary>
         /// Adds a user to an osu!web room.
@@ -41,5 +40,15 @@ namespace osu.Server.Spectator.Services
         /// <param name="userId">The ID of the user wanting to part the room.</param>
         /// <param name="roomId">The ID of the room to part.</param>
         Task RemoveUserFromRoomAsync(int userId, long roomId);
+
+        /// <summary>
+        /// 预确保谱面存在。
+        /// </summary>
+        /// <remarks>
+        ///  This will queue a background job to download the beatmap if it does not already exist.
+        /// </remarks>
+        Task EnsureBeatmapPresentAsync(int beatmapId);
+
+        void UploadReplayAsync(int scoreInfoUserID, long scoreInfoOnlineID, int scoreInfoBeatmapId, MemoryStream outStream);
     }
 }

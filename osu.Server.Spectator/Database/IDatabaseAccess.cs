@@ -20,12 +20,6 @@ namespace osu.Server.Spectator.Database
         Task<int?> GetUserIdFromTokenAsync(JsonWebToken jwtToken);
 
         /// <summary>
-        /// Returns the database ID of the owner of an OAuth client to which the supplied <paramref name="jwtToken"/> delegates permissions to.
-        /// Will be <c>null</c> if the token does not exist, has expired, has been revoked, or is not allowed to perform delegation.
-        /// </summary>
-        Task<int?> GetDelegatedResourceOwnerIdFromTokenAsync(JsonWebToken jwtToken);
-
-        /// <summary>
         /// Whether the user with the given <paramref name="userId"/> is currently restricted.
         /// </summary>
         Task<bool> IsUserRestrictedAsync(int userId);
@@ -34,11 +28,6 @@ namespace osu.Server.Spectator.Database
         /// Returns a username from a <paramref name="userId"/>.
         /// </summary>
         Task<string?> GetUsernameAsync(int userId);
-
-        /// <summary>
-        /// Returns the IDs of all users in groups with the given <see cref="groupIds"/>.
-        /// </summary>
-        Task<int[]> GetUsersInGroupsAsync(int[] groupIds);
 
         /// <summary>
         /// Returns the <see cref="multiplayer_room"/> with the given <paramref name="roomId"/>.
@@ -57,19 +46,14 @@ namespace osu.Server.Spectator.Database
         Task<database_beatmap?> GetBeatmapAsync(int beatmapId);
 
         /// <summary>
-        /// Retrieves beatmaps corresponding to the given <paramref name="beatmapIds"/>.
-        /// </summary>
-        Task<database_beatmap[]> GetBeatmapsAsync(int[] beatmapIds);
-
-        /// <summary>
         /// Retrieves all beatmaps corresponding to the given <paramref name="beatmapSetId"/>.
         /// </summary>
         Task<database_beatmap[]> GetBeatmapsAsync(int beatmapSetId);
 
         /// <summary>
-        /// Sets the end date of the <paramref name="room"/>.
+        /// Marks the given <paramref name="room"/> as active and accepting new players.
         /// </summary>
-        Task SetRoomEndDateAsync(MultiplayerRoom room, DateTimeOffset? endDate);
+        Task MarkRoomActiveAsync(MultiplayerRoom room);
 
         /// <summary>
         /// Updates the current settings of <paramref name="room"/> in the database.
@@ -95,6 +79,8 @@ namespace osu.Server.Spectator.Database
         /// Adds a login entry for the specified user.
         /// </summary>
         Task AddLoginForUserAsync(int userId, string? userIp);
+
+        Task OfflineUser(int userId);
 
         /// <summary>
         /// Remove a new participant for the specified <paramref name="room"/> in the database.
@@ -189,17 +175,12 @@ namespace osu.Server.Spectator.Database
         Task<osu_build?> GetBuildByIdAsync(int buildId);
 
         /// <summary>
-        /// Returns a single build with the given <paramref name="hash"/>, if one exists.
-        /// </summary>
-        Task<osu_build?> GetBuildByHashAsync(string hash);
-
-        /// <summary>
-        /// Returns all available main builds from the lazer and tachyon release streams which support online play (<c>allow_bancho</c>).
+        /// Returns all available main builds from the lazer and tachyon release streams.
         /// </summary>
         Task<IEnumerable<osu_build>> GetAllMainLazerBuildsAsync();
 
         /// <summary>
-        /// Returns all known platform-specifc lazer and tachyon builds which support online play (<c>allow_bancho</c>).
+        /// Returns all known platform-specifc lazer and tachyon builds.
         /// </summary>
         Task<IEnumerable<osu_build>> GetAllPlatformSpecificLazerBuildsAsync();
 
@@ -225,32 +206,18 @@ namespace osu.Server.Spectator.Database
         Task<(long roomID, long playlistItemID)?> GetMultiplayerRoomIdForScoreAsync(long scoreId);
 
         /// <summary>
-        /// Returns whether there has been any score token issued that is associated with the given <paramref name="playlistItemId"/>.
-        /// </summary>
-        Task<bool> AnyScoreTokenExistsFor(long playlistItemId);
-
-        /// <summary>
-        /// Retrieve all scores for a specified playlist item.
-        /// </summary>
-        /// <param name="playlistItemId">The playlist item.</param>
-        Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId);
-
-        /// <summary>
         /// Retrieve all passing scores for a specified playlist item.
         /// </summary>
+        /// <param name="roomId"></param>
         /// <param name="playlistItemId">The playlist item.</param>
         /// <param name="afterScoreId">An optional score ID to only fetch newer scores.</param>
-        Task<IEnumerable<SoloScore>> GetPassingScoresForPlaylistItem(long playlistItemId, ulong afterScoreId = 0);
+        /// <returns></returns>
+        Task<IEnumerable<SoloScore>> GetPassingScoresForPlaylistItem(long roomId, long playlistItemId, ulong afterScoreId = 0UL);
 
-        /// <summary>
-        /// Returns the best score of user with <paramref name="userId"/> on the playlist item with <paramref name="playlistItemId"/>.
-        /// </summary>
-        Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId);
-
-        /// <summary>
-        /// Gets the overall rank of user <paramref name="userId"/> in the room with <paramref name="roomId"/>.
-        /// </summary>
-        Task<int> GetUserRankInRoomAsync(long roomId, int userId);
+        // GetUserBestScoreAsync / GetUserRankInRoomAsync live in the upstream-surface block
+        // below — the older prod-style 3-arg signatures targeting playlist_best_scores are
+        // gone in favour of the upstream 2-arg `multiplayer_scores_high`-based versions
+        // that ScoreProcessedSubscriber actually calls.
 
         /// <summary>
         /// Logs an event that happened in a multiplayer room.
@@ -258,16 +225,48 @@ namespace osu.Server.Spectator.Database
         Task LogRoomEventAsync(multiplayer_realtime_room_event ev);
 
         /// <summary>
-        /// Logs an event that happened in a matchmaking room.
+        /// 预确保谱面存在。
         /// </summary>
-        Task LogRoomEventAsync(matchmaking_room_event ev);
+        /// <remarks>
+        ///  This will queue a background job to download the beatmap if it does not already exist.
+        /// </remarks>
+        Task<database_beatmap?> GetBeatmapOrFetchAsync(int beatmapId);
+
+        Task<fail_time?> GetBeatmapFailTimeAsync(int beatmapId);
+
+        Task UpdateFailTimeAsync(fail_time failTime);
+
+        Task<int?> GetUserPlaytimeAsync(string gamemode, int userId);
+        Task UpdateUserPlaytimeAsync(string gamemode, int userId, int playTime);
+
+        // ────────────────────────────────────────────────────────────────────
+        //  Upstream surface (matchmaking + ranked-play + adjacent helpers)
+        // ────────────────────────────────────────────────────────────────────
+        //  Method signatures lifted verbatim from `ppy/osu-server-spectator/master`
+        //  (commit ca1a7e1 "Implement duels for ranked play"). The matchmaking_*
+        //  tables backing these calls live behind alembic migration c4d5e6f7a8b9
+        //  on the g0v0 side; until that migration is applied in prod, every
+        //  matchmaking-targeted hub method will fail at the SQL layer rather
+        //  than at compile time.
 
         /// <summary>
-        /// Toggles the user's "hide user presence" website setting.
+        /// Resolves a delegated client-credentials JWT to its resource-owner user id.
+        /// Used by the referee scheme (Torii doesn't run referee, so this is dormant
+        /// in practice but the interface still requires it).
         /// </summary>
-        /// <param name="userId">The user's ID.</param>
-        /// <param name="visible">Whether the user should appear online to other players on the website.</param>
-        Task ToggleUserPresenceAsync(int userId, bool visible);
+        Task<int?> GetDelegatedResourceOwnerIdFromTokenAsync(JsonWebToken jwtToken);
+
+        Task<int[]> GetUsersInGroupsAsync(int[] groupIds);
+
+        Task<osu_build?> GetBuildByHashAsync(string hash);
+
+        Task<bool> AnyScoreTokenExistsFor(long playlistItemId);
+
+        Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId);
+
+        Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId);
+
+        Task<int> GetUserRankInRoomAsync(long roomId, int userId);
 
         Task<float> GetUserPPAsync(int userId, int rulesetId, int variant);
 
@@ -290,5 +289,27 @@ namespace osu.Server.Spectator.Database
         Task InsertUserEloHistoryEntry(ulong roomId, uint poolId, uint userId, uint opponentId, matchmaking_room_result result, int eloBefore, int eloAfter);
 
         Task<int[]> GetMatchmakingPoolRatingsAsync(uint poolId);
+
+        /// <summary>
+        /// Visibility toggle on the user's web-side presence (used by the
+        /// "appears offline" status). The g0v0 backend mirrors osu!web's
+        /// <c>users.user_allow_presence</c> column, so the implementation just
+        /// flips the equivalent field on <c>lazer_users</c>.
+        /// </summary>
+        Task ToggleUserPresenceAsync(int userId, bool visible);
+
+        /// <summary>
+        /// Sets / clears the room's <c>ends_at</c> column. Upstream's
+        /// <see cref="EndMatchAsync"/> assumes ends_at is always set to NOW(); this
+        /// overload lets matchmaking-driven flows schedule a future end-of-life.
+        /// </summary>
+        Task SetRoomEndDateAsync(MultiplayerRoom room, DateTimeOffset? endDate);
+
+        /// <summary>
+        /// Matchmaking-only event log overload (rooms have a separate
+        /// <c>matchmaking_room_events</c> table from the legacy
+        /// <c>multiplayer_realtime_room_events</c>).
+        /// </summary>
+        Task LogRoomEventAsync(matchmaking_room_event ev);
     }
 }

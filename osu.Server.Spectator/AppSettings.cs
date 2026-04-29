@@ -38,6 +38,21 @@ namespace osu.Server.Spectator
         public static string DatabaseUser { get; } = "osuweb";
         public static int DatabasePort { get; } = 3306;
 
+        /// <summary>
+        /// Torii: g0v0's MySQL database name. Upstream hardcoded the database
+        /// in the connection string, but g0v0 ships with `osu_api` as the
+        /// canonical schema name and we need to be able to override per-deploy.
+        /// </summary>
+        public static string DatabaseName { get; } = "osu_api";
+
+        /// <summary>
+        /// Torii: g0v0's MySQL password. Empty string = no password (the
+        /// connection string omits the Password= clause entirely so MySQL
+        /// falls back to whatever auth method the user account has — useful
+        /// for unix-socket auth in dev).
+        /// </summary>
+        public static string DatabasePassword { get; } = string.Empty;
+
         public static string SharedInteropDomain { get; } = "http://localhost:8080";
         public static string SharedInteropSecret { get; } = string.Empty;
 
@@ -127,6 +142,8 @@ namespace osu.Server.Spectator
             DatabaseHost = Environment.GetEnvironmentVariable("DB_HOST") ?? DatabaseHost;
             DatabaseUser = Environment.GetEnvironmentVariable("DB_USER") ?? DatabaseUser;
             DatabasePort = int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out int databasePort) ? databasePort : DatabasePort;
+            DatabaseName = Environment.GetEnvironmentVariable("DB_NAME") ?? DatabaseName;
+            DatabasePassword = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? DatabasePassword;
 
             SharedInteropDomain = Environment.GetEnvironmentVariable("SHARED_INTEROP_DOMAIN") ?? SharedInteropDomain;
             SharedInteropSecret = Environment.GetEnvironmentVariable("SHARED_INTEROP_SECRET") ?? SharedInteropSecret;

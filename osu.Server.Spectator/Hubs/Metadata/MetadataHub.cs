@@ -236,7 +236,10 @@ namespace osu.Server.Spectator.Hubs.Metadata
 
                 ulong lastProcessed = itemStats.LastProcessedScoreID;
 
-                SoloScore[] scores = (await db.GetPassingScoresForPlaylistItem(itemId, itemStats.LastProcessedScoreID)).ToArray();
+                // Torii: g0v0's GetPassingScoresForPlaylistItem joins on the room id
+                // (it reads from `playlist_best_scores` rather than upstream's score-table
+                // sweep, and that table's primary key includes room_id).
+                SoloScore[] scores = (await db.GetPassingScoresForPlaylistItem(stats.RoomID, itemId, itemStats.LastProcessedScoreID)).ToArray();
 
                 if (scores.Length == 0)
                     return;

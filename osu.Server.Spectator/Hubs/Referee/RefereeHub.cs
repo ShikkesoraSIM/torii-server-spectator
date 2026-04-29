@@ -108,7 +108,12 @@ namespace osu.Server.Spectator.Hubs.Referee
                 ]
             });
 
-            long roomId = await sharedInterop.CreateRoomAsync(Context.GetUserId(), room, tournamentMode: true);
+            // Torii: prod's ISharedInterop doesn't carry the `tournamentMode` flag (g0v0
+            // has no concept of referee tournament rooms — they're created as regular
+            // rooms). Torii doesn't currently expose this hub publicly, but the class
+            // still needs to compile. If/when Torii grows real referee support, the
+            // tournament_mode column will need to ride along.
+            long roomId = await sharedInterop.CreateRoomAsync(Context.GetUserId(), room);
             await eventDispatcher.PostRoomCreatedAsync(roomId, Context.GetUserId());
 
             using (var userUsage = await refereeStates.GetForUse(Context.GetUserId()))

@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using osu.Game.Online.Multiplayer;
 using osu.Game.Online.Rooms;
+using System.IO;
 
 namespace osu.Server.Spectator.Services
 {
@@ -74,16 +75,7 @@ namespace osu.Server.Spectator.Services
             {
                 string signature = hmacEncode(url, Encoding.UTF8.GetBytes(interopSecret));
 
-                var httpRequestMessage = new HttpRequestMessage
-                {
-                    RequestUri = new Uri(url),
-                    Method = method,
-                    Headers =
-                    {
-                        { "X-LIO-Signature", signature },
-                        { "Accept", "application/json" },
-                    },
-                };
+                var httpRequestMessage = new HttpRequestMessage { RequestUri = new Uri(url), Method = method, Headers = { { "X-LIO-Signature", signature }, { "Accept", "application/json" }, }, };
 
                 if (serialisedPostObject != null)
                 {
@@ -142,21 +134,14 @@ namespace osu.Server.Spectator.Services
         // Methods below purposefully async-await on `runCommand()` calls rather than directly returning the underlying calls.
         // This is done for better readability of exception stacks. Directly returning the tasks elides the name of the proxying method.
 
-        public async Task<long> CreateRoomAsync(int hostUserId, MultiplayerRoom room, bool tournamentMode)
+        public async Task<long> CreateRoomAsync(int hostUserId, MultiplayerRoom room)
         {
-            return long.Parse(await runCommand(HttpMethod.Post, "multiplayer/rooms", Newtonsoft.Json.JsonConvert.SerializeObject(new SharedInteropRoom(room)
-            {
-                HostUserId = hostUserId,
-                TournamentMode = tournamentMode
-            })));
+            return long.Parse(await runCommand(HttpMethod.Post, "multiplayer/rooms", Newtonsoft.Json.JsonConvert.SerializeObject(new RoomWithHostId(room) { HostUserId = hostUserId })));
         }
 
         public async Task AddUserToRoomAsync(int userId, long roomId, string password)
         {
-            await runCommand(HttpMethod.Put, $"multiplayer/rooms/{roomId}/users/{userId}", new
-            {
-                password = password
-            });
+            await runCommand(HttpMethod.Put, $"multiplayer/rooms/{roomId}/users/{userId}", new { password = password });
         }
 
         public async Task RemoveUserFromRoomAsync(int userId, long roomId)
@@ -167,7 +152,7 @@ namespace osu.Server.Spectator.Services
         /// <summary>
         /// A special <see cref="Room"/> that can be serialised with Newtonsoft.Json to create rooms hosted by a given <see cref="HostUserId">user</see>.
         /// </summary>
-        private class SharedInteropRoom : Room
+        private class RoomWithHostId : Room
         {
             /// <summary>
             /// The ID of the user to host the room.
@@ -176,18 +161,28 @@ namespace osu.Server.Spectator.Services
             public required int HostUserId { get; init; }
 
             /// <summary>
-            /// In "tournament mode" the <see cref="HostUserId"/> can have more than one realtime room open at a time.
-            /// </summary>
-            [Newtonsoft.Json.JsonProperty("tournament_mode")]
-            public required bool TournamentMode { get; init; }
-
-            /// <summary>
             /// Creates a <see cref="Room"/> from a <see cref="MultiplayerRoom"/>.
             /// </summary>
-            public SharedInteropRoom(MultiplayerRoom room)
+            public RoomWithHostId(MultiplayerRoom room)
                 : base(room)
             {
             }
+        }
+
+        /// <summary>
+        /// 预先请求服务器确保谱面存在。
+        /// </summary>
+        public async Task EnsureBeatmapPresentAsync(int beatmapId)
+        {
+            // 端点：POST /_lio/beatmaps/ensure
+            var payload = new { beatmap_id = beatmapId };
+            await runCommand(HttpMethod.Post, "beatmaps/ensure", payload);
+        }
+
+        public void UploadReplayAsync(int scoreInfoUserID, long scoreInfoOnlineID, int scoreInfoBeatmapId, MemoryStream outStream)
+        {
+            var payload = new { score_id = scoreInfoOnlineID, user_id = scoreInfoUserID, beatmap_id = scoreInfoBeatmapId, mreplay = Convert.ToBase64String(outStream.ToArray()) };
+            _ = runCommand(HttpMethod.Post, "scores/replay", payload);
         }
 
         [Serializable]
@@ -216,7 +211,8 @@ namespace osu.Server.Spectator.Services
                 }
 
                 // Outer exception message is serialised to clients, inner exception is logged to the server and NOT serialised to the client.
-                return new SharedInteropRequestFailedException(response.StatusCode, errorMessage, new Exception(await response.Content.ReadAsStringAsync()));
+                return new SharedInteropRequestFailedException(response.StatusCode, errorMessage,
+                    new Exception($"Shared interop request to {url} failed with {response.StatusCode} ({response.ReasonPhrase})."));
             }
 
             [Serializable]
