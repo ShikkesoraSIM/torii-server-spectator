@@ -1,0 +1,119 @@
+version: "3.8"
+
+# Local sandbox compose for the Torii spectator port.
+#
+# Brings up a SECOND spectator container alongside whatever you already have
+# running on host port 8006 (the prod-style M1PP build). It listens on
+# 127.0.0.1:8016 and joins the same docker network as your local g0v0-server
+# stack, so it can reach `app:8000` (the Python backend), `mysql:3306`, and
+# `redis:6379` by hostname without any extra config.
+#
+# Prereqs:
+#   - g0v0-server's docker-compose stack is up (`cd ../g0v0-server && docker
+#     compose up -d`). That creates the `g0v0-server_osu-network` external
+#     network this compose attaches to.
+#   - You have a `.env.local` next to this file (copy from .env.local.example
+#     and fill in the secrets — they MUST match g0v0-server's .env).
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up -d --build
+#   docker compose -f docker-compose.local.yml logs -f spectator-rp
+#   docker compose -f docker-compose.local.yml down
+#
+# This file is named docker-compose.LOCAL.yml on purpose so it doesn't clash
+# with the docker-compose.yml the prod deploy uses (different env layout, no
+# replays bind-mount paths, etc.).
+
+services:
+  spectator-rp:
+    build:
+      context: ./osu.Server.Spectator
+      dockerfile: Dockerfile
+    image: torii-server-spectator-rp:local
+    container_name: torii-spectator-rp
+
+    # Host port intentionally different from the prod-style spectator's 8006.
+    # Bind to 127.0.0.1 only — this is a local sandbox, no need to expose
+    # publicly. Internal port matches SERVER_PORT below.
+    ports:
+      - "127.0.0.1:8016:8016"
+
+    env_file:
+      - .env.local
+
+    environment:
+      # ─── Storage ─────────────────────────────────────────────────────
+      - SAVE_REPLAYS=1
+      - REPLAY_UPLOAD_THREADS=1
+      - REPLAYS_PATH=/app/replays
+      # FileScoreStorage is the default in the Torii build. Leaving the S3
+      # vars empty means S3ScoreStorage stays unused (the registration is
+      # already swapped — see ServiceCollectionExtensions.cs).
+      - S3_KEY=
+      - S3_SECRET=
+      - REPLAYS_BUCKET=
+
+      # ─── Server ──────────────────────────────────────────────────────
+      - SERVER_PORT=8016
+      - DD_AGENT_HOST=localhost
+      # Keep the local sandbox quiet — set TRACK_BUILD_USER_COUNTS only
+      # if you want to exercise the BuildUserCountUpdater hosted service.
+      # (g0v0 doesn't have an osu_builds table, the methods are stubbed
+      # to return empty so this is safe to leave off.)
+      - TRACK_BUILD_USER_COUNTS=
+
+      # ─── Network (shared g0v0 stack) ─────────────────────────────────
+      - REDIS_HOST=redis
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=osu_api
+      - DB_NAME=osu_api
+      # Password comes from .env.local (DB_PASSWORD). Leaving it empty
+      # makes DatabaseAccess omit the Password= clause entirely, which is
+      # what you want if you've configured MySQL with no password locally.
+
+      # ─── Auth ─────────────────────────────────────────────────────────
+      # Critical: JWT_SECRET_KEY MUST match g0v0-server's .env value or
+      # every connection bounces with "invalid token signature".
+      # USE_LEGACY_RSA_AUTH=false picks the HS256 path. Flip to true if
+      # you ever point this at a vanilla osu!web that signs with RSA.
+      - USE_LEGACY_RSA_AUTH=false
+      - OSU_CLIENT_ID=5
+      - JWT_ALGORITHM=HS256
+      - ALGORITHM=HS256
+
+      # ─── Shared interop with g0v0-server ─────────────────────────────
+      # `app:8000` is the g0v0 server hostname inside the shared docker
+      # network. The shared interop secret has to match g0v0's .env.
+      - SHARED_INTEROP_DOMAIN=http://app:8000
+
+      # ─── Sentry (optional) ───────────────────────────────────────────
+      # Leave empty for local. Errors land on stderr instead of Sentry.
+      - SENTRY_DSN=
+      - Sentry__Dsn=
+
+      # ─── Verbose auth logging while we shake out the port ────────────
+      # Useful for the first few smoke runs — flip to Information when
+      # you're confident auth works.
+      - Logging__LogLevel__Microsoft.AspNetCore.Authentication=Debug
+      - Logging__LogLevel__Microsoft.IdentityModel=Debug
+      - Logging__LogLevel__Microsoft.AspNetCore.Authorization=Debug
+
+    volumes:
+      # Replays land in ./replays of THIS repo (not g0v0's), to keep
+      # local-test data isolated.
+      - ./replays:/app/replays
+
+    restart: unless-stopped
+
+    # Joins the g0v0-server docker network so `app`, `mysql`, `redis`
+    # resolve to the right containers. The network name is whatever
+    # docker compose picks when it brings up g0v0-server — by default
+    # `<dirname>_<network-name>` = `g0v0-server_osu-network`.
+    networks:
+      - g0v0-network
+
+networks:
+  g0v0-network:
+    external: true
+    name: g0v0-server_osu-network
