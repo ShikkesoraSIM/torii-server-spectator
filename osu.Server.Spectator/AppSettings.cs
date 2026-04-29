@@ -8,6 +8,41 @@ namespace osu.Server.Spectator
 {
     public static class AppSettings
     {
+        /// <summary>
+        /// Tolerant boolean env-var parser used for every <c>bool</c> setting
+        /// below. Upstream relies on <see cref="bool.TryParse"/>, which only
+        /// accepts the literal strings "true" and "false". Operators following
+        /// Docker/12-factor conventions naturally write <c>SAVE_REPLAYS=1</c>
+        /// (or 0, yes, no, on, off), which silently fell back to the default
+        /// — most painfully on <c>SAVE_REPLAYS</c> where every replay was
+        /// dropped on the floor without a single log line. Recognise the
+        /// common truthy/falsy spellings instead.
+        /// </summary>
+        private static bool parseBool(string? value, bool defaultValue)
+        {
+            if (string.IsNullOrEmpty(value))
+                return defaultValue;
+            switch (value.Trim().ToLowerInvariant())
+            {
+                case "1":
+                case "true":
+                case "yes":
+                case "on":
+                case "y":
+                case "t":
+                    return true;
+                case "0":
+                case "false":
+                case "no":
+                case "off":
+                case "n":
+                case "f":
+                    return false;
+                default:
+                    return defaultValue;
+            }
+        }
+
         public static bool SaveReplays { get; }
 
         public static int ReplayUploaderConcurrency { get; set; } = 1;
@@ -125,7 +160,7 @@ namespace osu.Server.Spectator
 
         static AppSettings()
         {
-            SaveReplays = bool.TryParse(Environment.GetEnvironmentVariable("SAVE_REPLAYS"), out bool saveReplays) ? saveReplays : SaveReplays;
+            SaveReplays = parseBool(Environment.GetEnvironmentVariable("SAVE_REPLAYS"), SaveReplays);
             ReplayUploaderConcurrency = int.TryParse(Environment.GetEnvironmentVariable("REPLAY_UPLOAD_THREADS"), out int uploaderConcurrency) ? uploaderConcurrency : ReplayUploaderConcurrency;
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReplayUploaderConcurrency);
 
@@ -133,8 +168,8 @@ namespace osu.Server.Spectator
             S3Key = Environment.GetEnvironmentVariable("S3_KEY") ?? S3Key;
             S3Secret = Environment.GetEnvironmentVariable("S3_SECRET") ?? S3Secret;
             ReplaysBucket = Environment.GetEnvironmentVariable("REPLAYS_BUCKET") ?? ReplaysBucket;
-            TrackBuildUserCounts = bool.TryParse(Environment.GetEnvironmentVariable("TRACK_BUILD_USER_COUNTS"), out bool trackBuildUserCounts) ? trackBuildUserCounts : TrackBuildUserCounts;
-            ClientCheckVersion = bool.TryParse(Environment.GetEnvironmentVariable("CLIENT_CHECK_VERSION"), out bool clientCheckVersion) ? clientCheckVersion : ClientCheckVersion;
+            TrackBuildUserCounts = parseBool(Environment.GetEnvironmentVariable("TRACK_BUILD_USER_COUNTS"), TrackBuildUserCounts);
+            ClientCheckVersion = parseBool(Environment.GetEnvironmentVariable("CLIENT_CHECK_VERSION"), ClientCheckVersion);
 
             ClientCheckVersionExemptGroups = Environment.GetEnvironmentVariable("CLIENT_CHECK_VERSION_EXEMPT_GROUPS")?.Split(',')
                                                         .Select(id =>
@@ -155,7 +190,7 @@ namespace osu.Server.Spectator
             DatabasePort = int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out int databasePort) ? databasePort : DatabasePort;
             DatabaseName = Environment.GetEnvironmentVariable("DB_NAME") ?? DatabaseName;
             DatabasePassword = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? DatabasePassword;
-            EnableBeatmapStatusPolling = bool.TryParse(Environment.GetEnvironmentVariable("ENABLE_BEATMAP_STATUS_POLLING"), out bool enableBeatmapStatusPolling) ? enableBeatmapStatusPolling : EnableBeatmapStatusPolling;
+            EnableBeatmapStatusPolling = parseBool(Environment.GetEnvironmentVariable("ENABLE_BEATMAP_STATUS_POLLING"), EnableBeatmapStatusPolling);
 
             SharedInteropDomain = Environment.GetEnvironmentVariable("SHARED_INTEROP_DOMAIN") ?? SharedInteropDomain;
             SharedInteropSecret = Environment.GetEnvironmentVariable("SHARED_INTEROP_SECRET") ?? SharedInteropSecret;
@@ -163,7 +198,7 @@ namespace osu.Server.Spectator
             ClientVersionWebhookSecret = Environment.GetEnvironmentVariable("CLIENT_VERSION_WEBHOOK_SECRET") ?? ClientVersionWebhookSecret;
 
             JwtSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? JwtSecretKey;
-            UseLegacyRsaAuth = bool.TryParse(Environment.GetEnvironmentVariable("USE_LEGACY_RSA_AUTH"), out bool useLegacyRsaAuth) ? useLegacyRsaAuth : UseLegacyRsaAuth;
+            UseLegacyRsaAuth = parseBool(Environment.GetEnvironmentVariable("USE_LEGACY_RSA_AUTH"), UseLegacyRsaAuth);
             OsuClientId = int.TryParse(Environment.GetEnvironmentVariable("OSU_CLIENT_ID"), out int osuClientId) ? osuClientId : OsuClientId;
 
             SentryDsn = Environment.GetEnvironmentVariable("SENTRY_DSN");
@@ -174,13 +209,9 @@ namespace osu.Server.Spectator
                 ? mmRounds
                 : MatchmakingRoomRounds;
 
-            MatchmakingHeadToHeadIsBestOf = bool.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_HEAD_TO_HEAD_IS_BESTOF"), out bool mmHeadToHeadIsBestOf)
-                ? mmHeadToHeadIsBestOf
-                : MatchmakingHeadToHeadIsBestOf;
+            MatchmakingHeadToHeadIsBestOf = parseBool(Environment.GetEnvironmentVariable("MATCHMAKING_HEAD_TO_HEAD_IS_BESTOF"), MatchmakingHeadToHeadIsBestOf);
 
-            MatchmakingRoomAllowSkip = bool.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_ALLOW_SKIP"), out bool mmAllowSkip)
-                ? mmAllowSkip
-                : MatchmakingRoomAllowSkip;
+            MatchmakingRoomAllowSkip = parseBool(Environment.GetEnvironmentVariable("MATCHMAKING_ALLOW_SKIP"), MatchmakingRoomAllowSkip);
 
             MatchmakingLobbyUpdateRate = int.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_LOBBY_UPDATE_RATE"), out int mmLobbyUpdateRate)
                 ? TimeSpan.FromSeconds(mmLobbyUpdateRate)
