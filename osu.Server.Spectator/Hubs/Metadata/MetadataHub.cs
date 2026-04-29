@@ -158,7 +158,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
                 await Task.WhenAll
                 (
                     shouldBroadcastPresenceToOtherUsers(usage.Item)
-                        ? broadcastUserPresenceUpdate(usage.Item.UserId, usage.Item.ToUserPresence())
+                        ? broadcastUserPresenceUpdate(usage.Item.UserId, usage.Item.ToUserPresence(), usage.Item.VersionHash)
                         : Task.CompletedTask,
                     Clients.Caller.UserPresenceUpdated(usage.Item.UserId, usage.Item.ToUserPresence())
                 );
@@ -182,7 +182,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
                     //
                     // This is a single special case where we don't check against `shouldBroadcastPresentToOtherUsers` because
                     // it is required to tell other clients that "we went offline" in the "appears offline" scenario.
-                    broadcastUserPresenceUpdate(usage.Item.UserId, usage.Item.ToUserPresence()),
+                    broadcastUserPresenceUpdate(usage.Item.UserId, usage.Item.ToUserPresence(), usage.Item.VersionHash),
                     Clients.Caller.UserPresenceUpdated(usage.Item.UserId, usage.Item.ToUserPresence())
                 );
             }
@@ -333,11 +333,19 @@ namespace osu.Server.Spectator.Hubs.Metadata
                 await db.OfflineUser(state.Item.UserId);
 
             if (shouldBroadcastPresenceToOtherUsers(state.Item))
-                await broadcastUserPresenceUpdate(state.Item.UserId, null);
+                await broadcastUserPresenceUpdate(state.Item.UserId, null, state.Item.VersionHash);
             await scoreProcessedSubscriber.UnregisterFromAllMultiplayerRoomsAsync(state.Item.UserId);
         }
 
-        private async Task broadcastUserPresenceUpdate(int userId, UserPresence? userPresence)
+        // versionHash is passed in from the caller (which already holds the
+        // MetadataClientState lock for the given userId) rather than re-resolved
+        // here via TryGetStateFromUser, because re-acquiring the same EntityStore
+        // lock on the same thread that's already holding it deadlocks (the lock
+        // isn't reentrant). Symptom before the refactor was every UpdateActivity
+        // / UpdateStatus / CleanUpState call timing out with
+        // "Lock for MetadataClientState id N could not be obtained within timeout
+        // period" and CreateRoom etc. inheriting the timeout.
+        private Task broadcastUserPresenceUpdate(int userId, UserPresence? userPresence, string? versionHash)
         {
             // we never want appearing offline users to have their status broadcast to other clients.
             Debug.Assert(userPresence?.Status != UserStatus.Offline);
@@ -345,15 +353,9 @@ namespace osu.Server.Spectator.Hubs.Metadata
             // Torii: alongside every presence update, broadcast the verified-Torii client name
             // (or null for vanilla / unverified clients). Receivers stash it in a side-table
             // so the username chip can render the "Torii" badge next to verified players.
-            // The version hash that drives the lookup lives on MetadataClientState and was
-            // captured during OnConnectedAsync.
-            string? versionHash = null;
-            using (var stateUsage = await TryGetStateFromUser(userId))
-                versionHash = stateUsage?.Item?.VersionHash;
-
             string? clientName = toriiClientNameResolver.Resolve(versionHash);
 
-            await Task.WhenAll
+            return Task.WhenAll
             (
                 Clients.Group(ONLINE_PRESENCE_WATCHERS_GROUP).UserPresenceUpdated(userId, userPresence),
                 Clients.Group(FRIEND_PRESENCE_WATCHERS_GROUP(userId)).FriendPresenceUpdated(userId, userPresence),
