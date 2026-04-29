@@ -107,10 +107,21 @@ namespace osu.Server.Spectator
                     });
             services.AddAuthorization(options =>
             {
+                // Torii: g0v0's JWTs only carry sub/exp/jti/aud/iss — no `scopes`
+                // claim like osu-web emits ("scopes":["*"] for first-party clients).
+                // Plain `RequireAuthenticatedUser()` is what prod's M1PP build does
+                // (and what we want anyway: the JWT validation already proves the
+                // token came from g0v0, scope-level gating happens at the HTTP API
+                // layer rather than at SignalR-hub-entry).
+                //
+                // The referee policy is intentionally still claim-gated because
+                // referee-tier permissions are issued only on tokens minted with
+                // the multiplayer.write_manage scope, which is meaningful even
+                // on g0v0 once a referee panel ships. Until then RefereeHub stays
+                // unmapped (Startup never wires it up) so this policy is dormant.
                 options.AddPolicy(ConfigureJwtBearerOptions.LAZER_CLIENT_SCHEME, policy =>
                 {
                     policy.RequireAuthenticatedUser();
-                    policy.RequireClaim("scopes", "*");
                 });
                 options.AddPolicy(ConfigureJwtBearerOptions.REFEREE_CLIENT_SCHEME, policy =>
                 {
