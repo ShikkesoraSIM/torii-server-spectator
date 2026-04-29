@@ -305,8 +305,16 @@ namespace osu.Server.Spectator.Database
         {
             await using var connection = await getConnectionAsync();
 
+            // Torii: g0v0's `room_playlists` doesn't carry the beatmap checksum
+            // directly (osu-web's table did). Pull it from `beatmaps` via JOIN
+            // so the deserialised POCO has BeatmapChecksum populated for
+            // version-mismatch checks at score-submit time. Same in
+            // GetAllPlaylistItemsAsync below.
             return await connection.QuerySingleAsync<multiplayer_playlist_item>(
-                "SELECT * FROM room_playlists WHERE id = @Id AND room_id = @RoomId",
+                @"SELECT rp.*, b.checksum, b.difficulty_rating AS difficultyrating
+                  FROM room_playlists rp
+                  LEFT JOIN beatmaps b ON b.id = rp.beatmap_id
+                  WHERE rp.id = @Id AND rp.room_id = @RoomId",
                 new { Id = playlistItemId, RoomId = roomId });
         }
 
@@ -400,7 +408,16 @@ namespace osu.Server.Spectator.Database
         {
             await using var connection = await getConnectionAsync();
 
-            return (await connection.QueryAsync<multiplayer_playlist_item>("SELECT * FROM room_playlists WHERE room_id = @RoomId", new { RoomId = roomId })).ToArray();
+            // Torii: see GetPlaylistItemAsync — `room_playlists` doesn't store
+            // the beatmap checksum in g0v0, JOIN it from `beatmaps` so room-init
+            // time deserialisation produces playlist items the gameplay flow can
+            // version-check against client-uploaded score blobs.
+            return (await connection.QueryAsync<multiplayer_playlist_item>(
+                @"SELECT rp.*, b.checksum, b.difficulty_rating AS difficultyrating
+                  FROM room_playlists rp
+                  LEFT JOIN beatmaps b ON b.id = rp.beatmap_id
+                  WHERE rp.room_id = @RoomId",
+                new { RoomId = roomId })).ToArray();
         }
 
         public async Task MarkScoreHasReplay(Score score)

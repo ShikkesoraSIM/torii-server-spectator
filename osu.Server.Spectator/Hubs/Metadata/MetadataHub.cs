@@ -115,6 +115,21 @@ namespace osu.Server.Spectator.Hubs.Metadata
 
         public async Task<BeatmapUpdates> GetChangesSince(int queueId)
         {
+            // Torii: g0v0 has no `bss_process_queue` table — beatmap submissions
+            // round-trip through its own pipeline (`/api/v2/beatmaps/...`) and
+            // notify clients via the SignalR `BeatmapSetsUpdated` broadcast
+            // straight from the submission handler, so the client's
+            // GetChangesSince poll has nothing to enumerate from this side.
+            //
+            // Without this short-circuit, every poll throws because the
+            // upstream BeatmapStatusWatcher.GetUpdatedBeatmapSetsAsync tries
+            // to query the missing table (and authenticates with separate
+            // MYSQL_* env vars that aren't always wired). Returning an empty
+            // delta with the same queue id the caller sent in is the same
+            // behaviour the poller has when there's nothing new to report.
+            if (!AppSettings.EnableBeatmapStatusPolling)
+                return new BeatmapUpdates(Array.Empty<int>(), queueId);
+
             QueueProcessor.BeatmapUpdates updates = await BeatmapStatusWatcher.GetUpdatedBeatmapSetsAsync(queueId);
             return new BeatmapUpdates(updates.BeatmapSetIDs, updates.LastProcessedQueueID);
         }

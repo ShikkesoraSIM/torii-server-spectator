@@ -11,7 +11,15 @@ namespace osu.Server.Spectator.Database.Models
     public class multiplayer_room
     {
         public long id { get; set; }
-        public int user_id { get; set; }
+
+        // Torii: g0v0's `rooms` table column is `host_id` (FK to lazer_users.id),
+        // not osu-web's `user_id`. Renaming the POCO field so Dapper's
+        // SELECT * → POCO column-name auto-mapping picks it up. Without this,
+        // `host_id` from the DB row goes nowhere and downstream code that
+        // resolves the room host (UpdateRoomHostAsync, transfer-host flows)
+        // sees 0 / no host and breaks.
+        public int host_id { get; set; }
+
         public string name { get; set; } = string.Empty;
         public string password { get; set; } = string.Empty;
         public int channel_id { get; set; }
@@ -28,6 +36,12 @@ namespace osu.Server.Spectator.Database.Models
         public database_queue_mode queue_mode { get; set; }
         public ushort auto_start_duration { get; set; }
         public bool auto_skip { get; set; }
-        public bool tournament_mode { get; set; }
+
+        // Torii: g0v0 has no `tournament_mode` column on `rooms` (osu-web does).
+        // Field kept on the POCO with a hardcoded false getter so any code that
+        // reads `room.tournament_mode` still compiles and behaves like a
+        // non-tournament room. If/when Torii grows real referee/tournament
+        // support, both the DB column and this getter come back together.
+        public bool tournament_mode => false;
     }
 }
