@@ -587,6 +587,7 @@ namespace osu.Server.Spectator.Database
                     if (!dapperMapperInstalled)
                     {
                         DapperExtensions.InstallDateTimeOffsetMapper();
+                        DapperExtensions.InstallToriiEnumMappers();
                         dapperMapperInstalled = true;
                     }
                 }
