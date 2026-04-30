@@ -158,6 +158,31 @@ namespace osu.Server.Spectator
         /// </summary>
         public static int MatchmakingPoolSize { get; } = 50;
 
+        /// <summary>
+        /// Torii: when true, replays are stored regardless of beatmap rank
+        /// status (osu-web only stores them for ranked..loved). g0v0 needs
+        /// this on so leaderboards on graveyarded/qualified maps still
+        /// surface a watchable replay. Mirrors the M1PP setting of the
+        /// same name.
+        /// </summary>
+        public static bool EnableAllBeatmapLeaderboard { get; }
+
+        /// <summary>
+        /// Torii: enables osu! Autopilot scoring/leaderboards as a separate
+        /// pseudo-ruleset (`OSUAP`). When false, AP-modded scores fall back
+        /// to the base ruleset's leaderboard. Required for the playtime
+        /// tracker to bucket AP scores into the right `lazer_user_statistics.mode`
+        /// row.
+        /// </summary>
+        public static bool EnableAP { get; }
+
+        /// <summary>
+        /// Torii: enables osu!/taiko/fruits Relax scoring/leaderboards as
+        /// separate pseudo-rulesets (`OSURX`/`TAIKORX`/`FRUITSRX`). Same
+        /// shape as <see cref="EnableAP"/>.
+        /// </summary>
+        public static bool EnableRX { get; }
+
         static AppSettings()
         {
             SaveReplays = parseBool(Environment.GetEnvironmentVariable("SAVE_REPLAYS"), SaveReplays);
@@ -228,6 +253,11 @@ namespace osu.Server.Spectator
             MatchmakingPoolSize = int.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_POOL_SIZE"), out int mmPoolSize)
                 ? mmPoolSize
                 : MatchmakingPoolSize;
+
+            EnableAllBeatmapLeaderboard = parseBool(Environment.GetEnvironmentVariable("ENABLE_ALL_BEATMAP_LEADERBOARD"), EnableAllBeatmapLeaderboard);
+            // Accept both ENABLE_AP and ENABLE_OSU_AP (M1PP used the latter, upstream-style is the former).
+            EnableAP = parseBool(Environment.GetEnvironmentVariable("ENABLE_AP") ?? Environment.GetEnvironmentVariable("ENABLE_OSU_AP"), EnableAP);
+            EnableRX = parseBool(Environment.GetEnvironmentVariable("ENABLE_RX") ?? Environment.GetEnvironmentVariable("ENABLE_OSU_RX"), EnableRX);
         }
     }
 }

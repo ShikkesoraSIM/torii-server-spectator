@@ -19,6 +19,8 @@ using osu.Server.Spectator.Database;
 using osu.Server.Spectator.Database.Models;
 using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Extensions;
+using osu.Server.Spectator.Helpers;
+using StackExchange.Redis;
 
 namespace osu.Server.Spectator.Hubs.Spectator
 {
@@ -38,18 +40,25 @@ namespace osu.Server.Spectator.Hubs.Spectator
         private readonly IDatabaseFactory databaseFactory;
         private readonly ScoreUploader scoreUploader;
         private readonly IScoreProcessedSubscriber scoreProcessedSubscriber;
+        // Torii: M1PP injected redis here so it could pop the
+        // `score:existed_time:{token}` stream g0v0 publishes when a play
+        // begins. Without it, editPlayTime can't compute a delta and the
+        // per-mode playtime column on lazer_user_statistics never advances.
+        private readonly IDatabase redisDatabase;
 
         public SpectatorHub(
             ILoggerFactory loggerFactory,
             EntityStore<SpectatorClientState> users,
             IDatabaseFactory databaseFactory,
             ScoreUploader scoreUploader,
-            IScoreProcessedSubscriber scoreProcessedSubscriber)
+            IScoreProcessedSubscriber scoreProcessedSubscriber,
+            IConnectionMultiplexer redis)
             : base(loggerFactory, users)
         {
             this.databaseFactory = databaseFactory;
             this.scoreUploader = scoreUploader;
             this.scoreProcessedSubscriber = scoreProcessedSubscriber;
+            redisDatabase = redis.GetDatabase();
         }
 
         public async Task BeginPlaySession(long? scoreToken, SpectatorState state)
@@ -77,7 +86,14 @@ namespace osu.Server.Spectator.Hubs.Spectator
 
                 using (var db = databaseFactory.GetInstance())
                 {
-                    database_beatmap? beatmap = await db.GetBeatmapAsync(state.BeatmapID.Value);
+                    // Torii: OrFetch was M1PP's pattern. If a player begins a
+                    // session on a beatmap g0v0 hasn't cached yet (any map
+                    // nobody on this server has played) the bare
+                    // GetBeatmapAsync returns null and `beatmap?.checksum`
+                    // short-circuits the whole session — no replay, no
+                    // spectate broadcast. OrFetch falls through to
+                    // _lio/beatmaps/ensure to bootstrap the row + parent set.
+                    database_beatmap? beatmap = await db.GetBeatmapOrFetchAsync(state.BeatmapID.Value);
                     string? username = await db.GetUsernameAsync(userId);
 
                     if (string.IsNullOrEmpty(username))
@@ -157,6 +173,20 @@ namespace osu.Server.Spectator.Hubs.Spectator
                         return;
 
                     await processScore(usage.Item!);
+
+                    // Torii: M1PP-parity tracking that upstream doesn't do.
+                    //  - processFailtime updates the per-beatmap fail/exit
+                    //    histogram in `failtime` (read by song-select to
+                    //    draw the red bars on the timeline).
+                    //  - editPlayTime corrects the per-mode playtime that
+                    //    g0v0 optimistically counted on play start: the
+                    //    submission flow assumes the user finishes the map,
+                    //    so on a quit/fail we have to rewind by
+                    //    (assumed_runtime - actual_exit_seconds).
+                    int exitTime = (int)Math.Round((score.Replay.Frames.LastOrDefault()?.Time ?? 0) / 1000);
+                    if (state.State == SpectatedUserState.Failed || state.State == SpectatedUserState.Quit)
+                        await processFailtime(usage.Item!, exitTime, state);
+                    await editPlayTime(usage.Item!, exitTime);
                 }
                 finally
                 {
@@ -181,8 +211,13 @@ namespace osu.Server.Spectator.Hubs.Spectator
             long scoreToken = item.ScoreToken.Value;
 
             // Do nothing with scores on unranked beatmaps.
+            // Torii: M1PP exposed an `EnableAllBeatmapLeaderboard` escape
+            // hatch so g0v0 deploys can save replays for graveyard / WIP
+            // maps too (Torii promotes all rank statuses for leaderboard
+            // purposes). When the flag is on, the rank gate is skipped
+            // entirely.
             var status = score.ScoreInfo.BeatmapInfo!.Status;
-            if (status < min_beatmap_status_for_replays || status > max_beatmap_status_for_replays)
+            if (!AppSettings.EnableAllBeatmapLeaderboard && (status < min_beatmap_status_for_replays || status > max_beatmap_status_for_replays))
                 return;
 
             // if the user never hit anything, further processing that depends on the score existing can be waived because the client won't have submitted the score anyway.
@@ -281,6 +316,94 @@ namespace osu.Server.Spectator.Hubs.Spectator
                 state.State = SpectatedUserState.Quit;
 
             await Clients.Group(GetGroupId(userId)).UserFinishedPlaying(userId, state);
+        }
+
+        /// <summary>
+        /// Torii: M1PP-parity. Each beatmap has a `failtime` row containing
+        /// two 100-int histograms (`fail`, `exit`) representing how often
+        /// players failed or quit at each percent of the song. On a Failed
+        /// or Quit end-of-session we read the existing histogram, bump the
+        /// bucket corresponding to the relative exit time, and write it back.
+        /// Used by song-select to draw the red bars on the timeline.
+        /// </summary>
+        private async Task processFailtime(SpectatorClientState item, int exitTime, SpectatorState state)
+        {
+            using (var db = databaseFactory.GetInstance())
+            {
+                var failTime = await db.GetBeatmapFailTimeAsync(item.Beatmap!.beatmap_id);
+                int[]? target;
+
+                if (failTime == null)
+                {
+                    failTime = new fail_time
+                    {
+                        beatmap_id = item.Beatmap!.beatmap_id,
+                        exit = BlobHelper.IntArrayToBlob(new int[100]),
+                        fail = BlobHelper.IntArrayToBlob(new int[100]),
+                    };
+                }
+
+                switch (state.State)
+                {
+                    case SpectatedUserState.Failed:
+                        target = BlobHelper.ParseBlobToIntArray(failTime.fail);
+                        break;
+
+                    case SpectatedUserState.Quit:
+                        target = BlobHelper.ParseBlobToIntArray(failTime.exit);
+                        break;
+
+                    default:
+                        return;
+                }
+
+                // Guard against zero-length maps (failtime falls through to
+                // bucket 0 anyway, but we don't want a div-by-zero blowing
+                // up the EndPlaySession finally block).
+                int totalLength = item.Beatmap.total_length > 0 ? item.Beatmap.total_length : 1;
+                int index = Math.Clamp((int)((double)exitTime / totalLength * 100), 0, 99);
+                target[index] += 1;
+                byte[] blob = BlobHelper.IntArrayToBlob(target);
+                failTime.fail = state.State == SpectatedUserState.Failed ? blob : failTime.fail;
+                failTime.exit = state.State == SpectatedUserState.Quit ? blob : failTime.exit;
+                await db.UpdateFailTimeAsync(failTime);
+            }
+        }
+
+        /// <summary>
+        /// Torii: M1PP-parity. g0v0's score-submit pipeline optimistically
+        /// counts the full beatmap runtime against the user's per-mode
+        /// playtime when the play starts (publishing
+        /// `score:existed_time:{token}` with the assumed duration). This
+        /// method consumes that stream entry, computes the actual exit
+        /// delta, and corrects `lazer_user_statistics.play_time` so a quit
+        /// 30 seconds in doesn't get counted as 4 minutes of practice.
+        /// No-op if the stream is empty (passed completion path or upstream
+        /// race) — the optimistic count is then taken at face value.
+        /// </summary>
+        private async Task editPlayTime(SpectatorClientState item, int exitTime)
+        {
+            string key = $"score:existed_time:{item.ScoreToken}";
+            var messages = redisDatabase.StreamRange(key, "-", "+", 1);
+            if (messages.Length == 0)
+                return;
+
+            var message = messages[0];
+            int beforeTime = (int)message["time"];
+            redisDatabase.KeyDelete(key);
+            string gamemode = GameModeHelper.GameModeToStringSpecial(item.Score!.ScoreInfo.RulesetID, item.Score.ScoreInfo.APIMods);
+
+            using (var db = databaseFactory.GetInstance())
+            {
+                int? playTime = await db.GetUserPlaytimeAsync(gamemode, Context.GetUserId());
+
+                if (playTime == null)
+                    return;
+
+                playTime -= beforeTime;
+                playTime += Math.Min(beforeTime, exitTime);
+                await db.UpdateUserPlaytimeAsync(gamemode, Context.GetUserId(), playTime.Value);
+            }
         }
     }
 }

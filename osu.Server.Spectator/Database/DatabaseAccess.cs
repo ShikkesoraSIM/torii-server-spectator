@@ -93,7 +93,7 @@ namespace osu.Server.Spectator.Database
             checksum,
             beatmap_status as approved,
             difficulty_rating as difficultyrating,
-            total_length,
+            total_length AS total_length,
             CASE
                 WHEN mode = 'osu' THEN 0
                 WHEN mode = 'taiko' THEN 1

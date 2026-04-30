@@ -62,6 +62,21 @@ services:
       # to return empty so this is safe to leave off.)
       - TRACK_BUILD_USER_COUNTS=
 
+      # ─── Torii feature flags (M1PP parity) ───────────────────────────
+      # Enable these to match prod's M1PP behaviour:
+      #   ENABLE_ALL_BEATMAP_LEADERBOARD: save replays + count scores for
+      #     every rank status (graveyard / WIP included), not just
+      #     ranked..loved. Required if you want to spectate / rank on
+      #     pending-status maps.
+      #   ENABLE_AP / ENABLE_RX: promote Autopilot / Relax-modded plays
+      #     into the OSUAP / OSURX / TAIKORX / FRUITSRX pseudo-rulesets
+      #     so they get their own playtime + leaderboard buckets in
+      #     `lazer_user_statistics`. Both must also be enabled g0v0-side
+      #     for the matching ENUM rows to exist.
+      - ENABLE_ALL_BEATMAP_LEADERBOARD=1
+      - ENABLE_AP=1
+      - ENABLE_RX=1
+
       # ─── Network (shared g0v0 stack) ─────────────────────────────────
       - REDIS_HOST=redis
       # Two flavours of DB env vars on purpose:
