@@ -152,16 +152,21 @@ namespace osu.Server.Spectator.Hubs.Spectator
 
         // Total time we'll wait for the g0v0 score handler to link the score_token row to its
         // newly-created score row (process_score's first commit). 30ms is typical, but a slow
-        // DB / contended commit can push it longer — anything past ~750ms is almost certainly
+        // DB / contended commit can push it longer — anything past ~5s is almost certainly
         // a real failure rather than a race we can win by waiting. Tuned so we cover the
-        // realistic worst case without holding the hub thread.
+        // realistic worst case without holding the hub thread for too long.
         //
         // This retry exists because the lazer client fires EndPlaySession immediately after
         // submitScore, so the spectator can race the g0v0 /scores POST handler on Torii. The
         // upstream (osu-web) flow is heavier and rarely loses this race; on Torii it's been
         // observed often enough that without the retry the rank/PP popup silently never fires.
-        private const int register_for_single_score_max_wait_ms = 750;
-        private const int register_for_single_score_retry_delay_ms = 60;
+        //
+        // Bumped 750ms → 5000ms after a slow-DB / contended-process run kept losing the race.
+        // The hub thread cost is just an awaited Task.Delay loop — cheap. Worst case the user
+        // waits 5s for the popup, far better than spinning forever; client-side also has its
+        // own watchdog that gives up gracefully if even THIS times out.
+        private const int register_for_single_score_max_wait_ms = 5000;
+        private const int register_for_single_score_retry_delay_ms = 100;
 
         public async Task RegisterForSingleScoreAsync(string receiverConnectionId, int userId, long scoreToken)
         {
