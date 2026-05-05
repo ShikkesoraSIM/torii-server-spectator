@@ -218,11 +218,20 @@ namespace osu.Server.Spectator
             RedisHost = Environment.GetEnvironmentVariable("REDIS_HOST") ?? RedisHost;
             DataDogAgentHost = Environment.GetEnvironmentVariable("DD_AGENT_HOST") ?? DataDogAgentHost;
 
-            DatabaseHost = Environment.GetEnvironmentVariable("DB_HOST") ?? DatabaseHost;
-            DatabaseUser = Environment.GetEnvironmentVariable("DB_USER") ?? DatabaseUser;
-            DatabasePort = int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out int databasePort) ? databasePort : DatabasePort;
-            DatabaseName = Environment.GetEnvironmentVariable("DB_NAME") ?? DatabaseName;
-            DatabasePassword = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? DatabasePassword;
+            // Accept both legacy MYSQL_* names (m1pp + g0v0 docker-compose convention)
+            // and upstream's DB_* names. Prior Torii deploys typed `DB_PASS=password`
+            // / `MYSQL_PASSWORD=password` in compose, so a checkout that only honoured
+            // DB_PASSWORD landed empty-string and crashed every JWT validation with
+            // "MySqlException: Access denied (using password: NO)" the moment the
+            // OnTokenValidated callback tried to load the access_token row.
+            DatabaseHost = Environment.GetEnvironmentVariable("DB_HOST") ?? Environment.GetEnvironmentVariable("MYSQL_HOST") ?? DatabaseHost;
+            DatabaseUser = Environment.GetEnvironmentVariable("DB_USER") ?? Environment.GetEnvironmentVariable("MYSQL_USER") ?? DatabaseUser;
+            DatabasePort = int.TryParse(Environment.GetEnvironmentVariable("DB_PORT") ?? Environment.GetEnvironmentVariable("MYSQL_PORT"), out int databasePort) ? databasePort : DatabasePort;
+            DatabaseName = Environment.GetEnvironmentVariable("DB_NAME") ?? Environment.GetEnvironmentVariable("MYSQL_DATABASE") ?? DatabaseName;
+            DatabasePassword = Environment.GetEnvironmentVariable("DB_PASSWORD")
+                               ?? Environment.GetEnvironmentVariable("DB_PASS")
+                               ?? Environment.GetEnvironmentVariable("MYSQL_PASSWORD")
+                               ?? DatabasePassword;
             EnableBeatmapStatusPolling = parseBool(Environment.GetEnvironmentVariable("ENABLE_BEATMAP_STATUS_POLLING"), EnableBeatmapStatusPolling);
 
             SharedInteropDomain = Environment.GetEnvironmentVariable("SHARED_INTEROP_DOMAIN") ?? SharedInteropDomain;
