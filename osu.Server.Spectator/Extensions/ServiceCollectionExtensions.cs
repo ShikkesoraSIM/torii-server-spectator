@@ -30,12 +30,18 @@ namespace osu.Server.Spectator.Extensions
                                     .AddSingleton<EntityStore<RefereeClientState>>()
                                     .AddSingleton<GracefulShutdownManager>()
                                     .AddSingleton<MetadataBroadcaster>()
-                                    // Torii: replays land on the local filesystem under
-                                    // AppSettings.ReplaysPath (`/app/replays` inside the container,
-                                    // bind-mounted from `spectator-m1pp/replays` on the host).
-                                    // We don't run any S3-compatible object store on the Torii VPS,
-                                    // so the upstream-default S3ScoreStorage stays unused.
-                                    .AddSingleton<IScoreStorage, FileScoreStorage>()
+                                    // Torii: hand replays to g0v0 over the existing /_lio/scores/replay
+                                    // contract — it writes the bytes into ITS OWN storage at the
+                                    // canonical replays/{score_id}_{beatmap_id}_{user_id}_lazer_replay.osr
+                                    // path that Score.replay_filename resolves to. The previous
+                                    // FileScoreStorage wiring wrote to the spectator container's
+                                    // local filesystem (a bare integer filename under
+                                    // AppSettings.ReplaysPath) which g0v0 had no visibility into,
+                                    // so the replay icon would appear on every score (has_replay
+                                    // got flipped) but every download attempt 404'd. We don't run
+                                    // any S3-compatible object store on the Torii VPS, so the
+                                    // upstream S3ScoreStorage stays unused.
+                                    .AddSingleton<IScoreStorage, SharedInteropScoreStorage>()
                                     .AddSingleton<ScoreUploader>()
                                     .AddSingleton<IScoreProcessedSubscriber, ScoreProcessedSubscriber>()
                                     .AddSingleton<BuildUserCountUpdater>()
