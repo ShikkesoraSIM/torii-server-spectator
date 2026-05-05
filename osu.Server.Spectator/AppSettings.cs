@@ -125,8 +125,16 @@ namespace osu.Server.Spectator
         /// difference matters because g0v0 issues HS256 tokens — it doesn't have access
         /// to osu!web's RSA private key, and matching public-key infrastructure isn't
         /// worth running for a single-tenant deploy.
+        ///
+        /// Default is <c>false</c> because this branch (torii-customizations) targets
+        /// g0v0 deployments. Operators pointing this spectator at upstream osu!web must
+        /// set <c>USE_LEGACY_RSA_AUTH=true</c> explicitly. The previous default of
+        /// <c>true</c> combined with the tolerant bool env-var parser (which falls back
+        /// to the default for empty strings) caused every JWT to be RSA-validated against
+        /// HS256 tokens — IDX10503 "Token does not have a kid" — when the docker-compose
+        /// wrote <c>USE_LEGACY_RSA_AUTH=</c> (empty).
         /// </summary>
-        public static bool UseLegacyRsaAuth { get; } = true;
+        public static bool UseLegacyRsaAuth { get; } = false;
 
         /// <summary>
         /// OAuth client id assigned to the lazer client by osu!web. Used as the JWT
