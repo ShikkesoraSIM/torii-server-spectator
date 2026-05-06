@@ -33,7 +33,7 @@ namespace osu.Server.Spectator.Storage
                 filename);
 
             using (var outStream = File.Create(Path.Combine(AppSettings.ReplaysPath, filename)))
-                legacyEncoder.Encode(outStream);
+                legacyEncoder.Encode(outStream, leaveOpen: true);
 
             return Task.CompletedTask;
         }
