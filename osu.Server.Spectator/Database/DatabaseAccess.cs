@@ -623,7 +623,14 @@ namespace osu.Server.Spectator.Database
                 "ConnectionTimeout=15;" +
                 "Pooling=true;" +
                 "MinPoolSize=0;" +
-                "MaximumPoolSize=50;";
+                // Bumped from 50 → 200. Cascading failures in the matchmaking
+                // background service (FK violations, room-creation rollbacks)
+                // can transiently spike connection demand; 50 was tight enough
+                // that ANY recoverable burst would exhaust the pool and starve
+                // unrelated SignalR calls (queue join, lobby join). 200 has
+                // headroom without any meaningful resource cost on local /
+                // single-server deployments.
+                "MaximumPoolSize=200;";
 
             var connection = new MySqlConnection(connectionString);
             await connection.OpenAsync();
