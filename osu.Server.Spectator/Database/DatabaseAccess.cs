@@ -738,10 +738,13 @@ namespace osu.Server.Spectator.Database
 
         public async Task<bool> AnyScoreTokenExistsFor(long playlistItemId)
         {
+            // Torii: g0v0 doesn't have osu-web's `multiplayer_score_links`. The (item → finalised score)
+            // mapping lives on `score_tokens` rows where `score_id IS NOT NULL`. Rows with `score_id IS NULL`
+            // are in-progress / abandoned plays and must not block removal of the playlist item.
             var connection = await getConnectionAsync();
 
             var scoreTokenCount = await connection.QuerySingleAsync<long>(
-                "SELECT COUNT(1) FROM `score_tokens` WHERE `playlist_item_id` = @playlistItemId",
+                "SELECT COUNT(1) FROM `score_tokens` WHERE `playlist_item_id` = @playlistItemId AND `score_id` IS NOT NULL",
                 new { playlistItemId = playlistItemId });
 
             return scoreTokenCount > 0;
