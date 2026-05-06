@@ -115,9 +115,22 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
             State.StarRating = beatmaps.Select(b => b.difficultyrating).DefaultIfEmpty(0).Average();
 
             // Create an initial playlist item for the room. Clients require this to operate correctly.
+            // Torii: g0v0's `room_playlists` schema has FKs on `owner_id`
+            // (-> lazer_users.id) and `beatmap_id` (-> beatmaps.id), so the
+            // upstream pattern of inserting an empty `MultiplayerPlaylistItem()`
+            // (OwnerID=0, BeatmapID=0) trips both FKs and aborts the room
+            // creation. Seed the placeholder with valid references — the bot
+            // user as owner and the first deck beatmap (which we already have
+            // a row for, since it came from the pool selector). The "real"
+            // playlist items overwrite this one as the match progresses.
             using (var db = DbFactory.GetInstance())
             {
-                MultiplayerPlaylistItem initialItem = new MultiplayerPlaylistItem();
+                MultiplayerPlaylistItem initialItem = new MultiplayerPlaylistItem
+                {
+                    OwnerID = AppSettings.BanchoBotUserId,
+                    BeatmapID = beatmaps.Length > 0 ? (int)beatmaps[0].beatmap_id : 0,
+                    RulesetID = (int)pool.ruleset_id,
+                };
                 initialItem.ID = await db.AddPlaylistItemAsync(new multiplayer_playlist_item(Room.RoomID, initialItem));
 
                 Room.Playlist.Add(initialItem);

@@ -48,6 +48,11 @@ namespace osu.Server.Spectator.Database.Models
 
         public MultiplayerPlaylistItem ToPlaylistItem() => new MultiplayerPlaylistItem
         {
+            // Torii: g0v0's `room_playlists.owner_id` has a FK to
+            // `lazer_users.id`. Upstream's default of 0 (== unset) trips it
+            // and aborts room creation — seed every matchmaking-spawned
+            // playlist item with the bot user as owner.
+            OwnerID = AppSettings.BanchoBotUserId,
             BeatmapID = beatmap_id,
             BeatmapChecksum = checksum!,
             RulesetID = playmode,

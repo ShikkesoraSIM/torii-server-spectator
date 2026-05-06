@@ -56,6 +56,10 @@ services:
       # ─── Server ──────────────────────────────────────────────────────
       - SERVER_PORT=8016
       - DD_AGENT_HOST=localhost
+      # Bot user that owns server-spawned playlist items (matchmaking
+      # rooms). MUST match g0v0's BANCHOBOT_ID (=2 in this stack), or
+      # FK violations on `room_playlists.owner_id` abort match start.
+      - BANCHO_BOT_USER_ID=2
       # Keep the local sandbox quiet — set TRACK_BUILD_USER_COUNTS only
       # if you want to exercise the BuildUserCountUpdater hosted service.
       # (g0v0 doesn't have an osu_builds table, the methods are stubbed
