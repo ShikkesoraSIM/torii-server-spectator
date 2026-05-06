@@ -49,7 +49,10 @@ namespace osu.Server.Spectator.Storage
             var legacyEncoder = new LegacyScoreEncoder(score, new Beatmap { BeatmapVersion = item.Beatmap.osu_file_version });
 
             using var ms = new MemoryStream();
-            legacyEncoder.Encode(ms);
+            // leaveOpen: true so SerializationWriter inside Encode doesn't close the
+            // underlying stream — we still need to read the bytes back via ToArray()
+            // when handing off to UploadReplayAsync below.
+            legacyEncoder.Encode(ms, leaveOpen: true);
 
             int userId = score.ScoreInfo.UserID;
             long scoreOnlineId = score.ScoreInfo.OnlineID;
