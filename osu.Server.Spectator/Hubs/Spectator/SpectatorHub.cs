@@ -384,13 +384,13 @@ namespace osu.Server.Spectator.Hubs.Spectator
         private async Task editPlayTime(SpectatorClientState item, int exitTime)
         {
             string key = $"score:existed_time:{item.ScoreToken}";
-            var messages = redisDatabase.StreamRange(key, "-", "+", 1);
+            var messages = await redisDatabase.StreamRangeAsync(key, "-", "+", 1);
             if (messages.Length == 0)
                 return;
 
             var message = messages[0];
             int beforeTime = (int)message["time"];
-            redisDatabase.KeyDelete(key);
+            await redisDatabase.KeyDeleteAsync(key);
             string gamemode = GameModeHelper.GameModeToStringSpecial(item.Score!.ScoreInfo.RulesetID, item.Score.ScoreInfo.APIMods);
 
             using (var db = databaseFactory.GetInstance())
@@ -400,9 +400,12 @@ namespace osu.Server.Spectator.Hubs.Spectator
                 if (playTime == null)
                     return;
 
-                playTime -= beforeTime;
-                playTime += Math.Min(beforeTime, exitTime);
-                await db.UpdateUserPlaytimeAsync(gamemode, Context.GetUserId(), playTime.Value);
+                // g0v0 optimistically charged the full `beforeTime` against play_time at submit;
+                // refund the unplayed portion. Clamp to 0 so a stale stream entry / wipe race
+                // can't push play_time negative (it's stored unsigned downstream).
+                int unplayed = Math.Max(0, beforeTime - exitTime);
+                int corrected = Math.Max(0, playTime.Value - unplayed);
+                await db.UpdateUserPlaytimeAsync(gamemode, Context.GetUserId(), corrected);
             }
         }
     }
