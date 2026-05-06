@@ -60,12 +60,15 @@ namespace osu.Server.Spectator.Hubs.Spectator
             timer.Start();
 
             subscriber = redis.GetSubscriber();
-            subscriber.Subscribe(new RedisChannel("osu-channel:score:processed", RedisChannel.PatternMode.Literal), (_, message) => onMessageReceived(message));
+            // Hop off the redis subscription dispatch thread immediately. The handler awaits
+            // SignalR sends and DB queries; running it inline blocks delivery of subsequent
+            // messages on the same channel and was contributing to the rank/PP popup race.
+            subscriber.Subscribe(new RedisChannel("osu-channel:score:processed", RedisChannel.PatternMode.Literal), (_, message) => Task.Run(() => onMessageReceived(message)));
 
             logger = loggerFactory.CreateLogger(nameof(ScoreProcessedSubscriber));
         }
 
-        private void onMessageReceived(string? message)
+        private async Task onMessageReceived(string? message)
         {
             try
             {
@@ -80,10 +83,10 @@ namespace osu.Server.Spectator.Hubs.Spectator
                 if (singleScoreSubscriptions.TryRemove(scoreProcessed.ScoreId, out var subscription))
                 {
                     using (subscription)
-                        subscription.InvokeAsync().Wait();
+                        await subscription.InvokeAsync();
                 }
 
-                Task.Run(async () => await notifyMultiplayerRoomSubscribers(scoreProcessed));
+                await notifyMultiplayerRoomSubscribers(scoreProcessed);
 
                 DogStatsd.Increment($"{statsd_prefix}.messages.single-score.delivered");
             }
