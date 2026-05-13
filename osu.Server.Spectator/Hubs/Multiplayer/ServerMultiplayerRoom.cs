@@ -676,8 +676,17 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
 
                 using (var db = dbFactory.GetInstance())
                 {
-                    database_beatmap itemBeatmap = (await db.GetBeatmapAsync(MatchController.CurrentItem.BeatmapID))!;
-                    database_beatmap? userBeatmap = beatmapId == null ? itemBeatmap : await db.GetBeatmapAsync(beatmapId.Value);
+                    // Torii: same auto-fetch + null guard as ensureAllUsersValidStyle.
+                    // Previously this `!` NRE'd when the current item's beatmap wasn't
+                    // in g0v0's local cache (resulting in "An unexpected error occurred
+                    // invoking 'ChangeUserStyle'" on the client). OrFetch routes the miss
+                    // through LIO; if even that fails surface a normal InvalidStateException
+                    // the client can show as a readable error toast.
+                    database_beatmap? itemBeatmap = await db.GetBeatmapOrFetchAsync(MatchController.CurrentItem.BeatmapID);
+                    if (itemBeatmap == null)
+                        throw new InvalidStateException("Current item beatmap is not available on the server. Try changing the playlist item.");
+
+                    database_beatmap? userBeatmap = beatmapId == null ? itemBeatmap : await db.GetBeatmapOrFetchAsync(beatmapId.Value);
 
                     if (userBeatmap == null)
                         throw new InvalidStateException("Invalid beatmap selected.");
@@ -749,33 +758,52 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
             }
             else
             {
-                database_beatmap itemBeatmap;
+                database_beatmap? itemBeatmap;
                 database_beatmap[] validDifficulties;
 
                 using (var db = dbFactory.GetInstance())
                 {
-                    itemBeatmap = (await db.GetBeatmapAsync(MatchController.CurrentItem.BeatmapID))!;
-                    validDifficulties = await db.GetBeatmapsAsync(itemBeatmap.beatmapset_id);
+                    // Torii: use the OrFetch variant + drop the null-forgiving deref.
+                    // The previous `!` here NRE'd whenever the current item's beatmap
+                    // wasn't in g0v0's local `beatmaps` table (most commonly: the host
+                    // just changed the current playlist item via EditPlaylistItem to a
+                    // map nobody on this server has ever played, or the row was
+                    // deleted_at-soft-deleted between the edit's auto-fetch and the
+                    // freestyle revalidation). SignalR wraps an NRE as a generic
+                    // "An unexpected error occurred invoking 'EditPlaylistItem'"
+                    // toast on the client which leaves the host with no way to recover
+                    // the room. OrFetch routes the miss through LIO to bootstrap the
+                    // row; if even that fails we treat the freestyle branch as a no-op
+                    // (revalidating individual users requires the parent beatmapset's
+                    // difficulty list, which we can't enumerate without a row anyway —
+                    // the non-freestyle ValidateUserMods sweep below still runs).
+                    itemBeatmap = await db.GetBeatmapOrFetchAsync(MatchController.CurrentItem.BeatmapID);
+                    validDifficulties = itemBeatmap == null
+                        ? Array.Empty<database_beatmap>()
+                        : await db.GetBeatmapsAsync(itemBeatmap.beatmapset_id);
                 }
 
-                foreach (var user in Users)
+                if (itemBeatmap != null)
                 {
-                    int? userBeatmapId = user.BeatmapId;
-                    int? userRulesetId = user.RulesetId;
+                    foreach (var user in Users)
+                    {
+                        int? userBeatmapId = user.BeatmapId;
+                        int? userRulesetId = user.RulesetId;
 
-                    database_beatmap? foundBeatmap = validDifficulties.SingleOrDefault(b => b.beatmap_id == userBeatmapId);
+                        database_beatmap? foundBeatmap = validDifficulties.SingleOrDefault(b => b.beatmap_id == userBeatmapId);
 
-                    // Reset beatmap style if it's not a valid difficulty for the current beatmap set.
-                    if (userBeatmapId != null && foundBeatmap == null)
-                        userBeatmapId = null;
+                        // Reset beatmap style if it's not a valid difficulty for the current beatmap set.
+                        if (userBeatmapId != null && foundBeatmap == null)
+                            userBeatmapId = null;
 
-                    int beatmapRuleset = foundBeatmap?.playmode ?? itemBeatmap.playmode;
+                        int beatmapRuleset = foundBeatmap?.playmode ?? itemBeatmap.playmode;
 
-                    // Reset ruleset style when it's no longer valid for the resolved beatmap.
-                    if (userRulesetId != null && beatmapRuleset > 0 && userRulesetId != beatmapRuleset)
-                        userRulesetId = null;
+                        // Reset ruleset style when it's no longer valid for the resolved beatmap.
+                        if (userRulesetId != null && beatmapRuleset > 0 && userRulesetId != beatmapRuleset)
+                            userRulesetId = null;
 
-                    await changeUserStyle(user, userBeatmapId, userRulesetId);
+                        await changeUserStyle(user, userBeatmapId, userRulesetId);
+                    }
                 }
             }
 
