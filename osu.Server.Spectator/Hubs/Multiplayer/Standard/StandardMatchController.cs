@@ -221,18 +221,28 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
 
                 if (ReferenceEquals(existingItem, CurrentItem))
                 {
+                    // Mid-play edits are a real bug (would mutate the running
+                    // match's target) — surface this one.
                     if (room.State != MultiplayerRoomState.Open)
                         throw new InvalidStateException("The current item in the room cannot be edited when currently being played.");
                 }
 
+                // Torii: silent no-op family (matches the RemovePlaylistItem
+                // treatment further down). "Item gone" and "already played"
+                // are both side effects of normal post-gameplay queue churn
+                // racing the client's UI state — they're not actionable
+                // errors and the toast adds noise without helping.
+                // The permission-denied case stays as a real error because
+                // it represents the user genuinely doing something they
+                // shouldn't.
                 if (existingItem == null)
-                    throw new InvalidStateException("Attempted to change an item that doesn't exist.");
+                    return; // idempotent: nothing to update.
 
                 if (existingItem.OwnerID != user.UserID && !isHostOrReferee(user))
                     throw new InvalidStateException("Attempted to change an item which is not owned by the user.");
 
                 if (existingItem.Expired)
-                    throw new InvalidStateException("Attempted to change an item which has already been played.");
+                    return; // history; the client's optimistic edit settles when RoomUpdated arrives.
 
                 // Ensure the playlist order doesn't change.
                 item.PlaylistOrder = existingItem.PlaylistOrder;
@@ -253,29 +263,65 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
         {
             var item = room.Playlist.FirstOrDefault(item => item.ID == playlistItemId);
 
+            // Torii: silent no-op family.
+            //
+            // The original osu! spectator code throws InvalidStateException for
+            // these cases. SignalR turns each one into a user-facing error toast
+            // ("The only item in the room cannot be removed.", "Attempted to
+            // remove an item which has already been played."). Live data showed
+            // hosts triggering these every time they post-played map and tried
+            // to clean up the queue — a race between client state and server
+            // state where the client thought the remove button was valid
+            // (item not yet expired, queue had >1 item) and the server's
+            // post-gameplay state had already advanced. None of these cases
+            // are bugs the user can do anything about — they can't unexpire
+            // the item, and "the only item" is by design (room must have ≥1
+            // playable item). Returning silently from here lets the client's
+            // optimistic UI settle on the next RoomUpdated (which carries the
+            // authoritative state) without ever showing the toast.
+            //
+            // Genuine error cases (permission denied, removing the current
+            // item mid-play) are still thrown — those are bugs in the caller's
+            // intent that the user CAN act on (don't try, or wait until the
+            // map ends).
             if (item == null)
-                throw new InvalidStateException("Item does not exist in the room.");
+                return; // idempotent: already gone, nothing to do.
 
             if (ReferenceEquals(item, CurrentItem))
             {
-                // The current item check is only an optimisation for this condition. It is guaranteed for the single item in the room to be the current item.
-                if (UpcomingItems.Count() == 1)
-                    throw new InvalidStateException("The only item in the room cannot be removed.");
-
+                // Mid-play removal of the current item is a real bug (would
+                // leave the running match with no playable target). Surface
+                // this one. Check BEFORE the only-item silent path so a
+                // mid-play single-item room still errors instead of silently
+                // accepting an action that would corrupt the running match.
                 if (room.State != MultiplayerRoomState.Open)
                     throw new InvalidStateException("The current item in the room cannot be removed when currently being played.");
+
+                // Only-item check stays silent — the room needs at least one
+                // playable item and "remove the only one" is a no-op by design.
+                if (UpcomingItems.Count() == 1)
+                    return;
             }
 
+            // Permission check stays as a real error — the user IS doing
+            // something they shouldn't (trying to remove someone else's
+            // queued map without being host or referee).
             if (item.OwnerID != user.UserID && !isHostOrReferee(user))
                 throw new InvalidStateException("Attempted to remove an item which is not owned by the user.");
 
+            // Expired = already removed from the queue (lives in history).
+            // Silent no-op rather than error.
             if (item.Expired)
-                throw new InvalidStateException("Attempted to remove an item which has already been played.");
+                return;
 
             using (var db = dbFactory.GetInstance())
             {
+                // Score-link guard — the item was played and has scores attached,
+                // which the FK constraint won't let us delete. Same silent no-op
+                // semantics as the .Expired check: from the user's perspective
+                // the item is already "history", nothing to surface.
                 if (await db.AnyScoreTokenExistsFor(playlistItemId))
-                    throw new InvalidStateException("Attempted to remove an item which has already been played.");
+                    return;
 
                 await db.RemovePlaylistItemAsync(room.RoomID, playlistItemId);
 

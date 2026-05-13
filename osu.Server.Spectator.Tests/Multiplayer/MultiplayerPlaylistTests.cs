@@ -253,8 +253,14 @@ namespace osu.Server.Spectator.Tests.Multiplayer
         }
 
         [Fact]
-        public async Task ExternalItemsCanNotBeRemoved()
+        public async Task NonexistentItemRemovalIsSilentNoOp()
         {
+            // Torii: removing an item that doesn't exist used to throw
+            // "Item does not exist in the room." Now it's a silent no-op so
+            // the client's optimistic UI race (client thinks an item still
+            // exists, server already collected it) doesn't surface as a
+            // toast. The behavioural assertion is unchanged: nothing
+            // happens at the DB or broadcast layer.
             Database.Setup(d => d.GetBeatmapAsync(3333)).ReturnsAsync(new database_beatmap { checksum = "3333" });
 
             await Hub.JoinRoom(ROOM_ID);
@@ -265,20 +271,27 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                 BeatmapChecksum = "3333"
             });
 
-            await Assert.ThrowsAsync<InvalidStateException>(() => Hub.RemovePlaylistItem(3));
+            await Hub.RemovePlaylistItem(3); // no throw expected
             Database.Verify(db => db.RemovePlaylistItemAsync(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
             Receiver.Verify(client => client.PlaylistItemRemoved(It.IsAny<long>()), Times.Never);
         }
 
         [Fact]
-        public async Task CurrentItemCanNotBeRemovedIfSingle()
+        public async Task OnlyItemRemovalIsSilentNoOp()
         {
+            // Torii: "The only item in the room cannot be removed." used to
+            // throw — common pain point after gameplay when host tried to
+            // clean up the queue. Now silent so the client UI just doesn't
+            // see the deletion go through. Host can Edit the only item to
+            // swap maps instead.
             Database.Setup(d => d.GetBeatmapAsync(3333)).ReturnsAsync(new database_beatmap { checksum = "3333" });
 
             await Hub.JoinRoom(ROOM_ID);
             await Hub.ChangeSettings(new MultiplayerRoomSettings { QueueMode = QueueMode.AllPlayers });
 
-            await Assert.ThrowsAsync<InvalidStateException>(() => Hub.RemovePlaylistItem(1));
+            await Hub.RemovePlaylistItem(1); // no throw expected
+            Database.Verify(db => db.RemovePlaylistItemAsync(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
+            Receiver.Verify(client => client.PlaylistItemRemoved(It.IsAny<long>()), Times.Never);
         }
 
         [Fact]
@@ -309,8 +322,12 @@ namespace osu.Server.Spectator.Tests.Multiplayer
         }
 
         [Fact]
-        public async Task ExpiredItemsCanNotBeRemoved()
+        public async Task ExpiredItemRemovalIsSilentNoOp()
         {
+            // Torii: expired items live in the history list, not the queue.
+            // Trying to remove one used to throw "Attempted to remove an
+            // item which has already been played." which the user has no
+            // way to act on. Silent now — DB stays untouched, no broadcast.
             Database.Setup(d => d.GetBeatmapAsync(3333)).ReturnsAsync(new database_beatmap { checksum = "3333" });
 
             await Hub.JoinRoom(ROOM_ID);
@@ -333,7 +350,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
             await LoadAndFinishGameplay(ContextUser);
             await Hub.ChangeState(MultiplayerUserState.Idle);
 
-            await Assert.ThrowsAsync<InvalidStateException>(() => Hub.RemovePlaylistItem(1));
+            await Hub.RemovePlaylistItem(1); // no throw expected — item 1 is expired
             Database.Verify(db => db.RemovePlaylistItemAsync(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
             Receiver.Verify(client => client.PlaylistItemRemoved(It.IsAny<long>()), Times.Never);
         }
@@ -527,8 +544,11 @@ namespace osu.Server.Spectator.Tests.Multiplayer
         }
 
         [Fact]
-        public async Task ExpiredItemsCanNotBeChanged()
+        public async Task ExpiredItemEditIsSilentNoOp()
         {
+            // Torii: paired with ExpiredItemRemovalIsSilentNoOp. Editing
+            // history is meaningless; silent no-op rather than user-facing
+            // toast.
             Database.Setup(d => d.GetBeatmapAsync(3333)).ReturnsAsync(new database_beatmap { checksum = "3333" });
 
             await Hub.JoinRoom(ROOM_ID);
@@ -539,27 +559,39 @@ namespace osu.Server.Spectator.Tests.Multiplayer
             await LoadAndFinishGameplay(ContextUser);
             await Hub.ChangeState(MultiplayerUserState.Idle);
 
-            await Assert.ThrowsAsync<InvalidStateException>(() => Hub.EditPlaylistItem(new MultiplayerPlaylistItem
+            // No throw expected. The auto-added clone is now the current
+            // item; item 1 (the played original) is expired.
+            await Hub.EditPlaylistItem(new MultiplayerPlaylistItem
             {
                 ID = 1,
                 BeatmapID = 3333,
                 BeatmapChecksum = "3333"
-            }));
+            });
         }
 
         [Fact]
-        public async Task PlaylistItemsWithScoreTokenInDatabaseCannotBeRemoved()
+        public async Task ItemsWithScoreTokenAttachedRemovalIsSilentNoOp()
         {
+            // Torii: a score-token row in the DB means the item was played
+            // and the FK constraint blocks deletion. Same silent-no-op
+            // semantics as the .Expired case.
             Database.Setup(d => d.GetBeatmapAsync(3333)).ReturnsAsync(new database_beatmap { checksum = "3333" });
             Database.Setup(d => d.AnyScoreTokenExistsFor(1)).ReturnsAsync(true);
 
             await Hub.JoinRoom(ROOM_ID);
             await Hub.ChangeSettings(new MultiplayerRoomSettings { QueueMode = QueueMode.AllPlayers });
 
-            await MarkCurrentUserReadyAndAvailable();
-            await Hub.StartMatch();
+            // Need at least 2 non-expired items so the only-item silent path
+            // doesn't short-circuit the score-token branch we're trying to
+            // exercise here.
+            await Hub.AddPlaylistItem(new MultiplayerPlaylistItem
+            {
+                BeatmapID = 3333,
+                BeatmapChecksum = "3333"
+            });
 
-            await Assert.ThrowsAsync<InvalidStateException>(() => Hub.RemovePlaylistItem(1));
+            await Hub.RemovePlaylistItem(1); // no throw — item 1 has a score token attached
+            Database.Verify(db => db.RemovePlaylistItemAsync(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
         }
 
         [Fact]
