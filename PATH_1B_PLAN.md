@@ -298,7 +298,7 @@ When all phases land, the SQL implementations and the MySQL connection string ar
 All endpoints share:
 
 - **Base URL**: `${SHARED_INTEROP_DOMAIN}/_lio/spectator/...` (or just `/_lio/...` for the 7 already-existing endpoints)
-- **Auth**: `X-LIO-Signature: hmac-sha256(SHARED_INTEROP_SECRET, METHOD + PATH + BODY)`
+- **Auth**: `X-LIO-Signature: hmac-sha1(SHARED_INTEROP_SECRET, URL_WITH_TIMESTAMP_QUERY_PARAM)`. SHA1 (not SHA256) matches the existing `SharedInterop` HMAC contract — same secret signs both clients against g0v0. The signature scope is the full request URL with a `?timestamp=<unix>` query param appended (NOT the body), again to match the existing pattern. g0v0 currently does NOT verify the signature on its `/_lio/*` endpoints (`INTEGRATION_AUDIT.md` §HTTP `_lio`); enable verification on g0v0's side before any sensitive Path 1B endpoint goes live.
 - **Content-Type**: `application/json`
 - **Errors**:
   - `404` for "not found" semantics (the DAO returns nullable types — `null` becomes `404` over the wire)
