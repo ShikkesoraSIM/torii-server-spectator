@@ -303,43 +303,64 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
             // intent that the user CAN act on (don't try, or wait until the
             // map ends).
             if (item == null)
-                return; // idempotent: already gone, nothing to do.
+            {
+                // Idempotent silent — the item is genuinely gone (raced with
+                // another remove, or never existed). Nothing actionable for
+                // the user; the optimistic UI will settle on next RoomUpdated.
+                room.Log($"RemovePlaylistItem: item {playlistItemId} not found in playlist, silent no-op");
+                return;
+            }
 
             if (ReferenceEquals(item, CurrentItem))
             {
-                // Mid-play removal of the current item is a real bug (would
-                // leave the running match with no playable target). Surface
-                // this one. Check BEFORE the only-item silent path so a
-                // mid-play single-item room still errors instead of silently
-                // accepting an action that would corrupt the running match.
+                // Mid-play removal of the current item would corrupt the
+                // running match — keep this as a hard error. Check BEFORE the
+                // only-item path so a mid-play single-item room errors
+                // instead of accepting an action that would break gameplay.
                 if (room.State != MultiplayerRoomState.Open)
                     throw new InvalidStateException("The current item in the room cannot be removed when currently being played.");
 
-                // Only-item check stays silent — the room needs at least one
-                // playable item and "remove the only one" is a no-op by design.
+                // Only-upcoming case: previously a silent no-op (upstream
+                // invariant: room needs ≥1 playable item). The silent return
+                // left users stuck — they'd click remove, nothing happened,
+                // no toast, no clue what to do. Surface a CLEAR error
+                // message instead so they understand AND have an obvious
+                // next step ("add another, then try again"). The state-
+                // machine invariant stays intact; only the UX feedback
+                // changes from silent → actionable.
                 if (UpcomingItems.Count() == 1)
-                    return;
+                {
+                    throw new InvalidStateException(
+                        "Can't remove the only map in the queue — add another beatmap first, then this one can be removed.");
+                }
             }
 
-            // Permission check stays as a real error — the user IS doing
-            // something they shouldn't (trying to remove someone else's
-            // queued map without being host or referee).
+            // Permission check stays as a real error — user trying to remove
+            // someone else's queued map without being host or referee.
             if (item.OwnerID != user.UserID && !isHostOrReferee(user))
                 throw new InvalidStateException("Attempted to remove an item which is not owned by the user.");
 
-            // Expired = already removed from the queue (lives in history).
-            // Silent no-op rather than error.
+            // Expired = already removed from the queue (in history view).
+            // Silent no-op rather than error — lazer client moves expired
+            // items from Queue to History; the user clicking Remove on a
+            // history item is a no-op semantically.
             if (item.Expired)
+            {
+                room.Log($"RemovePlaylistItem: item {playlistItemId} is already expired (in history), silent no-op");
                 return;
+            }
 
             using (var db = dbFactory.GetInstance())
             {
-                // Score-link guard — the item was played and has scores attached,
-                // which the FK constraint won't let us delete. Same silent no-op
-                // semantics as the .Expired check: from the user's perspective
-                // the item is already "history", nothing to surface.
+                // Score-link guard — the item has scores attached, FK
+                // constraint won't let us delete. Same silent semantics as
+                // the .Expired check: the item is "history" from the user's
+                // perspective.
                 if (await db.AnyScoreTokenExistsFor(playlistItemId))
+                {
+                    room.Log($"RemovePlaylistItem: item {playlistItemId} has attached scores (history-linked), silent no-op");
                     return;
+                }
 
                 await db.RemovePlaylistItemAsync(room.RoomID, playlistItemId);
 
