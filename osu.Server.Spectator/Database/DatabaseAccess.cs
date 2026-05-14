@@ -811,16 +811,25 @@ namespace osu.Server.Spectator.Database
         }
 
 
-        public async Task<bool> AnyScoreTokenExistsFor(long playlistItemId)
+        public async Task<bool> AnyScoreTokenExistsFor(long roomId, long playlistItemId)
         {
             // Torii: g0v0 doesn't have osu-web's `multiplayer_score_links`. The (item → finalised score)
             // mapping lives on `score_tokens` rows where `score_id IS NOT NULL`. Rows with `score_id IS NULL`
             // are in-progress / abandoned plays and must not block removal of the playlist item.
+            //
+            // CRITICAL: `score_tokens.playlist_item_id` is ROOM-SCOPED (the logical id from
+            // `room_playlists.id`, not the global `room_playlists.db_id`). The same logical id
+            // exists in every room. Without scoping by `room_id`, this query counts scores from
+            // EVERY ROOM that ever had a playlist item with this logical id — which made removing
+            // even fresh items in newer rooms fail because the older rooms' scores raced the count
+            // up. Observed in prod with room 181 item 1: 69 score_tokens existed for `playlist_item_id=1`
+            // globally (all from older rooms), so the guard fired and Remove silently no-op'd.
+            // Filter by `room_id` so the count only sees scores for THIS room's item.
             var connection = await getConnectionAsync();
 
             var scoreTokenCount = await connection.QuerySingleAsync<long>(
-                "SELECT COUNT(1) FROM `score_tokens` WHERE `playlist_item_id` = @playlistItemId AND `score_id` IS NOT NULL",
-                new { playlistItemId = playlistItemId });
+                "SELECT COUNT(1) FROM `score_tokens` WHERE `room_id` = @roomId AND `playlist_item_id` = @playlistItemId AND `score_id` IS NOT NULL",
+                new { roomId, playlistItemId });
 
             return scoreTokenCount > 0;
         }

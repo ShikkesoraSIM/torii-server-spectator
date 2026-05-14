@@ -260,7 +260,7 @@ namespace osu.Server.Spectator.Database
 
         Task<osu_build?> GetBuildByHashAsync(string hash);
 
-        Task<bool> AnyScoreTokenExistsFor(long playlistItemId);
+        Task<bool> AnyScoreTokenExistsFor(long roomId, long playlistItemId);
 
         Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId);
 

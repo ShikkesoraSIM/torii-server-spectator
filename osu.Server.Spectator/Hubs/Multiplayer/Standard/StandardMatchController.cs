@@ -356,7 +356,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
                 // constraint won't let us delete. Same silent semantics as
                 // the .Expired check: the item is "history" from the user's
                 // perspective.
-                if (await db.AnyScoreTokenExistsFor(playlistItemId))
+                if (await db.AnyScoreTokenExistsFor(room.RoomID, playlistItemId))
                 {
                     room.Log($"RemovePlaylistItem: item {playlistItemId} has attached scores (history-linked), silent no-op");
                     return;
