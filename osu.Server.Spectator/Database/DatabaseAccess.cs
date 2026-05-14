@@ -113,14 +113,14 @@ namespace osu.Server.Spectator.Database
             difficulty_rating as difficultyrating,
             total_length AS total_length,
             CASE
-                WHEN mode = 'osu' THEN 0
-                WHEN mode = 'taiko' THEN 1
-                WHEN mode = 'fruits' THEN 2
-                WHEN mode = 'mania' THEN 3
-                WHEN mode = 'osurx' THEN 4
-                WHEN mode = 'osuap' THEN 5
-                WHEN mode = 'taikorx' THEN 6
-                WHEN mode = 'fruitsrx' THEN 7
+                WHEN LOWER(mode) = 'osu' THEN 0
+                WHEN LOWER(mode) = 'taiko' THEN 1
+                WHEN LOWER(mode) = 'fruits' THEN 2
+                WHEN LOWER(mode) = 'mania' THEN 3
+                WHEN LOWER(mode) = 'osurx' THEN 4
+                WHEN LOWER(mode) = 'osuap' THEN 5
+                WHEN LOWER(mode) = 'taikorx' THEN 6
+                WHEN LOWER(mode) = 'fruitsrx' THEN 7
                 ELSE 0
             END as playmode,
             14 as osu_file_version
@@ -190,8 +190,45 @@ namespace osu.Server.Spectator.Database
         {
             await using var connection = await getConnectionAsync();
 
+            // Torii: g0v0's `beatmaps.mode` is a STRING enum
+            // ('OSU'/'TAIKO'/'FRUITS'/'MANIA' uppercase in current prod data —
+            // verified by directly inspecting the MySQL table). The
+            // `database_beatmap.playmode` POCO field is `ushort`, so the
+            // previous `mode as playmode` projection had Dapper try to parse
+            // "OSU" as an int and crashed every freestyle-room state update
+            // with `System.Data.DataException: Error parsing column 5
+            // (playmode=OSU - String)`. That bubbled up through
+            // ServerMultiplayerRoom.ensureAllUsersValidStyle → the SignalR
+            // hub method invocation → the client's `client.ChangeState
+            // (FinishedPlay)` await → "Score preparation failed!" toast.
+            //
+            // Decode using the same CASE pattern as GetBeatmapAsync above,
+            // wrapped in LOWER() so it's case-insensitive (data has both
+            // 'OSU' and 'osu' depending on import path / age). Hardcode
+            // osu_file_version to 14 to match GetBeatmapAsync's handling
+            // (we don't track it in g0v0 — see line ~126).
             return (await connection.QueryAsync<database_beatmap>(
-                "SELECT id as beatmap_id, beatmapset_id, checksum, beatmap_status as approved, difficulty_rating as difficultyrating, mode as playmode, 0 as osu_file_version FROM beatmaps WHERE beatmapset_id = @BeatmapSetId AND deleted_at IS NULL",
+                @"SELECT
+            id as beatmap_id,
+            beatmapset_id,
+            checksum,
+            beatmap_status as approved,
+            difficulty_rating as difficultyrating,
+            total_length AS total_length,
+            CASE
+                WHEN LOWER(mode) = 'osu' THEN 0
+                WHEN LOWER(mode) = 'taiko' THEN 1
+                WHEN LOWER(mode) = 'fruits' THEN 2
+                WHEN LOWER(mode) = 'mania' THEN 3
+                WHEN LOWER(mode) = 'osurx' THEN 4
+                WHEN LOWER(mode) = 'osuap' THEN 5
+                WHEN LOWER(mode) = 'taikorx' THEN 6
+                WHEN LOWER(mode) = 'fruitsrx' THEN 7
+                ELSE 0
+            END as playmode,
+            14 as osu_file_version
+        FROM beatmaps
+        WHERE beatmapset_id = @BeatmapSetId AND deleted_at IS NULL",
                 new { BeatmapSetId = beatmapSetId })).ToArray();
         }
 
@@ -727,14 +764,14 @@ namespace osu.Server.Spectator.Database
                     beatmap_status AS approved,
                     difficulty_rating AS difficultyrating,
                     CASE
-                        WHEN mode = 'osu' THEN 0
-                        WHEN mode = 'taiko' THEN 1
-                        WHEN mode = 'fruits' THEN 2
-                        WHEN mode = 'mania' THEN 3
-                        WHEN mode = 'osurx' THEN 4
-                        WHEN mode = 'osuap' THEN 5
-                        WHEN mode = 'taikorx' THEN 6
-                        WHEN mode = 'fruitsrx' THEN 7
+                        WHEN LOWER(mode) = 'osu' THEN 0
+                        WHEN LOWER(mode) = 'taiko' THEN 1
+                        WHEN LOWER(mode) = 'fruits' THEN 2
+                        WHEN LOWER(mode) = 'mania' THEN 3
+                        WHEN LOWER(mode) = 'osurx' THEN 4
+                        WHEN LOWER(mode) = 'osuap' THEN 5
+                        WHEN LOWER(mode) = 'taikorx' THEN 6
+                        WHEN LOWER(mode) = 'fruitsrx' THEN 7
                         ELSE 0
                     END AS playmode,
                     14 AS osu_file_version
