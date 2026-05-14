@@ -350,6 +350,7 @@ We do NOT cut over all 60 endpoints at once. Order:
 | `MultiplayerEventDispatcher.PostMatchmakingRoomCreatedAsync` writes to non-existent `matchmaking_room_events` (`INTEGRATION_AUDIT.md` line 178) | Phase 9 | Folded into the matchmaking migration. |
 | `BeatmapStatusWatcher` polls non-existent `bss_process_queue` | Not in 1B scope | Separately addressed via redis pub/sub from g0v0 if we want live "newly-uploaded beatmap" broadcasts. |
 | `BuildUserCountUpdater` targets non-existent `osu_builds` | Phase 10 | Implement against `client_versions` (separate webhook flow) OR keep permanently stubbed. |
+| **Pre-existing: `osu.Server.Spectator.Tests` does not compile** (17 errors, all `'multiplayer_room' does not contain a definition for 'user_id'`) | Cleanup pass, no specific phase | The Torii schema rename `multiplayer_rooms.user_id → rooms.host_id` updated the POCO but never updated the test fixtures. Tests have been broken since at least `8a6c26f` (verified by checking out and rebuilding). Doesn't block the production `osu.Server.Spectator.csproj` build (which is clean). When a phase touches `multiplayer_room` semantics, take the opportunity to fix the corresponding tests too. |
 
 ---
 
