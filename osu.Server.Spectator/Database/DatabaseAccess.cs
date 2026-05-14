@@ -24,15 +24,25 @@ namespace osu.Server.Spectator.Database
         // private MySqlConnection? openConnection;
         private readonly ILogger<DatabaseAccess> logger;
         private readonly ISharedInterop sharedInterop;
+        private readonly ISpectatorBackendClient backend;
 
-        public DatabaseAccess(ILoggerFactory loggerFactory, ISharedInterop sharedInterop)
+        public DatabaseAccess(ILoggerFactory loggerFactory, ISharedInterop sharedInterop, ISpectatorBackendClient backend)
         {
             logger = loggerFactory.CreateLogger<DatabaseAccess>();
             this.sharedInterop = sharedInterop;
+            this.backend = backend;
         }
 
         public async Task<int?> GetUserIdFromTokenAsync(JsonWebToken jwtToken)
         {
+            // Path 1B Phase 1: when USE_HTTP_DAO_AUTH=true, delegate to the
+            // SpectatorBackendClient which talks HTTP to g0v0's
+            // /_lio/spectator/auth/resolve-token. Default (flag off) keeps the
+            // legacy direct-MySQL path below for operators who haven't cut
+            // over yet. See PATH_1B_PLAN.md §5 Phase 1 + §8 migration strategy.
+            if (AppSettings.UseHttpDaoAuth)
+                return await backend.ResolveUserIdFromTokenAsync(jwtToken);
+
             // Look the access_token string up directly. We deliberately do NOT trust the
             // sub claim here: when a user is migrated between IDs (account merge / id
             // transfer) we rewrite oauth_tokens.user_id to the new id but the JWT payload
@@ -53,6 +63,10 @@ namespace osu.Server.Spectator.Database
 
         public async Task<string?> GetUsernameAsync(int userId)
         {
+            // Path 1B Phase 1: see GetUserIdFromTokenAsync.
+            if (AppSettings.UseHttpDaoAuth)
+                return await backend.GetUsernameAsync(userId);
+
             await using var connection = await getConnectionAsync();
 
             return await connection.QueryFirstOrDefaultAsync<string?>("SELECT username FROM lazer_users WHERE id = @UserID", new { UserID = userId });
@@ -60,6 +74,10 @@ namespace osu.Server.Spectator.Database
 
         public async Task<bool> IsUserRestrictedAsync(int userId)
         {
+            // Path 1B Phase 1: see GetUserIdFromTokenAsync.
+            if (AppSettings.UseHttpDaoAuth)
+                return await backend.IsUserRestrictedAsync(userId);
+
             await using var connection = await getConnectionAsync();
 
             var priv = await connection.QueryFirstOrDefaultAsync<int>("SELECT priv FROM lazer_users WHERE id = @UserID", new { UserID = userId });
@@ -652,6 +670,14 @@ namespace osu.Server.Spectator.Database
 
         public async Task<int?> GetDelegatedResourceOwnerIdFromTokenAsync(JsonWebToken jwtToken)
         {
+            // Path 1B Phase 1: see GetUserIdFromTokenAsync. g0v0's endpoint
+            // is also a stub (always returns null) — symmetric with this
+            // legacy path which also returns null. Keeping the route through
+            // the backend lets future delegation logic land server-side
+            // without touching the spectator.
+            if (AppSettings.UseHttpDaoAuth)
+                return await backend.ResolveDelegatedResourceOwnerIdFromTokenAsync(jwtToken);
+
             // Torii: g0v0's OAuth table is `oauth_tokens` (not osu-web's
             // `oauth_access_tokens`), columns are slightly different too:
             //   - no `revoked` flag (deletions hard-delete the row)
@@ -670,6 +696,11 @@ namespace osu.Server.Spectator.Database
 
         public async Task<int[]> GetUsersInGroupsAsync(int[] groupIds)
         {
+            // Path 1B Phase 1: see GetUserIdFromTokenAsync. g0v0's endpoint
+            // is also a stub (always returns empty) — same shape as below.
+            if (AppSettings.UseHttpDaoAuth)
+                return await backend.GetUsersInGroupsAsync(groupIds);
+
             // Torii: g0v0 doesn't have a `phpbb_user_group` table — group
             // membership is tracked via the `lazer_users.is_supporter` /
             // `is_admin` / `priv` flags directly on the user row. The only

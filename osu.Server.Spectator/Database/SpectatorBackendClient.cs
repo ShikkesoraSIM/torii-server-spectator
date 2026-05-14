@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Newtonsoft.Json;
 
 namespace osu.Server.Spectator.Database
@@ -206,6 +207,101 @@ namespace osu.Server.Spectator.Database
             byte[] inputBytes = Encoding.ASCII.GetBytes(input);
             byte[] hash = HMACSHA1.HashData(keyBytes, inputBytes);
             return hash.Aggregate(string.Empty, (s, b) => s + $"{b:x2}", s => s);
+        }
+
+        // ---------------------------------------------------------------
+        // Phase 1 — Auth + identity
+        // ---------------------------------------------------------------
+
+        public async Task<int?> ResolveUserIdFromTokenAsync(JsonWebToken jwt)
+        {
+            if (string.IsNullOrEmpty(jwt.EncodedToken))
+                return null;
+
+            var response = await SendAsync<ResolveTokenResponse>(
+                HttpMethod.Post,
+                "auth/resolve-token",
+                new { token = jwt.EncodedToken });
+
+            return response?.UserId;
+        }
+
+        public async Task<bool> IsUserRestrictedAsync(int userId)
+        {
+            var response = await SendAsync<IsRestrictedResponse>(
+                HttpMethod.Get,
+                $"users/{userId}/is-restricted");
+
+            // Defensive default: if g0v0 ever returns an empty body for
+            // this endpoint (shouldn't, but treat null === fail-closed)
+            // we report the user as restricted. Matches the SQL path's
+            // behaviour where a missing user row triggers `priv != 1`
+            // via int default(0) → restricted.
+            return response?.Restricted ?? true;
+        }
+
+        public async Task<string?> GetUsernameAsync(int userId)
+        {
+            var response = await SendAsync<UsernameResponse>(
+                HttpMethod.Get,
+                $"users/{userId}/username");
+
+            // 404 from g0v0 → SendAsync returns null → callers expect
+            // null username for missing users.
+            return response?.Username;
+        }
+
+        public async Task<int?> ResolveDelegatedResourceOwnerIdFromTokenAsync(JsonWebToken jwt)
+        {
+            if (string.IsNullOrEmpty(jwt.EncodedToken))
+                return null;
+
+            var response = await SendAsync<ResolveTokenResponse>(
+                HttpMethod.Post,
+                "auth/resolve-delegated-token",
+                new { token = jwt.EncodedToken });
+
+            return response?.UserId;
+        }
+
+        public async Task<int[]> GetUsersInGroupsAsync(int[] groupIds)
+        {
+            var response = await SendAsync<UsersInGroupsResponse>(
+                HttpMethod.Post,
+                "users/in-groups",
+                new { group_ids = groupIds });
+
+            return response?.UserIds ?? [];
+        }
+
+        // ---------------------------------------------------------------
+        // Wire shapes for Phase 1 responses (kept private nested for
+        // locality — these are deserialisation DTOs, not part of the
+        // public DAO contract).
+        // ---------------------------------------------------------------
+
+        private class ResolveTokenResponse
+        {
+            [JsonProperty("user_id")]
+            public int? UserId { get; set; }
+        }
+
+        private class IsRestrictedResponse
+        {
+            [JsonProperty("restricted")]
+            public bool Restricted { get; set; }
+        }
+
+        private class UsernameResponse
+        {
+            [JsonProperty("username")]
+            public string Username { get; set; } = string.Empty;
+        }
+
+        private class UsersInGroupsResponse
+        {
+            [JsonProperty("user_ids")]
+            public int[] UserIds { get; set; } = [];
         }
     }
 

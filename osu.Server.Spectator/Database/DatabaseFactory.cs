@@ -17,12 +17,18 @@ namespace osu.Server.Spectator.Database
         // service-locator lookups.
         private readonly ISharedInterop sharedInterop;
 
-        public DatabaseFactory(ILoggerFactory loggerFactory, ISharedInterop sharedInterop)
+        // Path 1B: SpectatorBackendClient handles HTTP-backed DAO methods
+        // when USE_HTTP_DAO_* flags are on. DatabaseAccess routes per-method
+        // based on the flag state. See PATH_1B_PLAN.md.
+        private readonly ISpectatorBackendClient backend;
+
+        public DatabaseFactory(ILoggerFactory loggerFactory, ISharedInterop sharedInterop, ISpectatorBackendClient backend)
         {
             this.loggerFactory = loggerFactory;
             this.sharedInterop = sharedInterop;
+            this.backend = backend;
         }
 
-        public IDatabaseAccess GetInstance() => new DatabaseAccess(loggerFactory, sharedInterop);
+        public IDatabaseAccess GetInstance() => new DatabaseAccess(loggerFactory, sharedInterop, backend);
     }
 }
