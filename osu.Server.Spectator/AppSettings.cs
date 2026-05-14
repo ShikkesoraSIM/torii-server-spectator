@@ -173,6 +173,34 @@ namespace osu.Server.Spectator
         /// surface a watchable replay. Mirrors the M1PP setting of the
         /// same name.
         /// </summary>
+        #region Path 1B HTTP-DAO migration flags (see PATH_1B_PLAN.md)
+
+        // Each surface of IDatabaseAccess is migrated to HTTP one phase at a
+        // time. Each phase's flag gates whether that surface's calls go via
+        // SpectatorBackendClient (HTTP to g0v0) or the legacy DatabaseAccess
+        // path (direct MySQL). Default: false (legacy SQL) on every phase, so
+        // a fresh checkout of this branch keeps existing behaviour. Operators
+        // flip each flag to true once the corresponding g0v0 endpoints land
+        // and pass smoke tests in their environment.
+        //
+        // The phased rollout means at any commit the spectator can be in
+        // mixed mode (some methods HTTP, some MySQL). Rollback of any phase
+        // is one env-var flip, no rebuild needed.
+
+        public static bool UseHttpDaoAuth { get; }           // Phase 1: auth/identity (5 methods)
+        public static bool UseHttpDaoSession { get; }        // Phase 2: user session lifecycle (4 methods)
+        public static bool UseHttpDaoSocial { get; }         // Phase 3: friends/relationships (2 methods)
+        public static bool UseHttpDaoBeatmap { get; }        // Phase 4: beatmap + fail-time (5 methods)
+        public static bool UseHttpDaoRoom { get; }           // Phase 5: multiplayer room lifecycle (10 methods)
+        public static bool UseHttpDaoPlaylist { get; }       // Phase 6: playlist items (7 methods) — also fixes the played-item-stuck bug
+        public static bool UseHttpDaoScore { get; }          // Phase 7: scores (8 methods)
+        public static bool UseHttpDaoEvents { get; }         // Phase 8: event logging (1 method)
+        public static bool UseHttpDaoMatchmaking { get; }    // Phase 9: matchmaking pools/stats/ELO (10 methods, needs alembic c4d5e6f7a8b9)
+        public static bool UseHttpDaoBuilds { get; }         // Phase 10: build version tracking (5 methods, currently stubbed)
+        public static bool UseHttpDaoMisc { get; }           // Phase 11: chat filters + playtime (3 methods)
+
+        #endregion
+
         public static bool EnableAllBeatmapLeaderboard { get; }
 
         /// <summary>
@@ -270,6 +298,22 @@ namespace osu.Server.Spectator
             MatchmakingPoolSize = int.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_POOL_SIZE"), out int mmPoolSize)
                 ? mmPoolSize
                 : MatchmakingPoolSize;
+
+            // Path 1B per-phase HTTP-DAO migration flags. All default false
+            // (legacy SQL) until the corresponding g0v0 endpoints land and
+            // the operator opts in. See PATH_1B_PLAN.md for the per-phase
+            // surface description.
+            UseHttpDaoAuth = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_AUTH"), UseHttpDaoAuth);
+            UseHttpDaoSession = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_SESSION"), UseHttpDaoSession);
+            UseHttpDaoSocial = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_SOCIAL"), UseHttpDaoSocial);
+            UseHttpDaoBeatmap = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_BEATMAP"), UseHttpDaoBeatmap);
+            UseHttpDaoRoom = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_ROOM"), UseHttpDaoRoom);
+            UseHttpDaoPlaylist = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_PLAYLIST"), UseHttpDaoPlaylist);
+            UseHttpDaoScore = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_SCORE"), UseHttpDaoScore);
+            UseHttpDaoEvents = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_EVENTS"), UseHttpDaoEvents);
+            UseHttpDaoMatchmaking = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_MATCHMAKING"), UseHttpDaoMatchmaking);
+            UseHttpDaoBuilds = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_BUILDS"), UseHttpDaoBuilds);
+            UseHttpDaoMisc = parseBool(Environment.GetEnvironmentVariable("USE_HTTP_DAO_MISC"), UseHttpDaoMisc);
 
             EnableAllBeatmapLeaderboard = parseBool(Environment.GetEnvironmentVariable("ENABLE_ALL_BEATMAP_LEADERBOARD"), EnableAllBeatmapLeaderboard);
             // Accept both ENABLE_AP and ENABLE_OSU_AP (M1PP used the latter, upstream-style is the former).

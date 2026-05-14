@@ -22,6 +22,13 @@ namespace osu.Server.Spectator.Extensions
         {
             return serviceCollection.AddHttpClient()
                                     .AddSingleton<ISharedInterop, SharedInterop>()
+                                    // Path 1B HTTP-backed DAO transport. Registered alongside
+                                    // ISharedInterop (which handles state-changing ops over
+                                    // /_lio/*). SpectatorBackendClient handles read/write DAO
+                                    // operations over /_lio/spectator/* as we migrate
+                                    // IDatabaseAccess methods phase-by-phase out of MySQL and
+                                    // into HTTP. See PATH_1B_PLAN.md for the per-phase rollout.
+                                    .AddSingleton<ISpectatorBackendClient, SpectatorBackendClient>()
                                     .AddSingleton<EntityStore<SpectatorClientState>>()
                                     .AddSingleton<EntityStore<MultiplayerClientState>>()
                                     .AddSingleton<EntityStore<ServerMultiplayerRoom>>()
