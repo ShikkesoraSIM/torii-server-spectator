@@ -94,8 +94,26 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Standard
                 await room.HandlePlaylistItemChanged(CurrentItem, true);
                 await updatePlaylistOrder(db);
 
-                // In host-only mode, duplicate the playlist item for the next round if no other non-expired items exist.
-                if (room.Settings.QueueMode == QueueMode.HostOnly && room.Playlist.All(item => item.Expired))
+                // Torii: auto-clone the just-played item if the queue is now
+                // exhausted, in ANY queue mode. Upstream restricted this to
+                // HostOnly because in shared-queue modes (AllPlayers,
+                // RoundRobin) the assumption is that other users queued items
+                // to take over after the current one expires. On Torii's
+                // smaller-server scale we routinely hit "single-host room
+                // plays the only map, queue exhausts, next ready-up trips
+                // `Cannot ready up while all items have been played.`" in
+                // ServerMultiplayerRoom.cs because CurrentItem stays expired
+                // with no successor to advance to. Auto-cloning unconditionally
+                // when the queue exhausts unblocks the ready-up cycle for any
+                // queue mode at the cost of attributing the new item to the
+                // just-played item's owner (which is correct for HostOnly and
+                // acceptable for the other modes as a stopgap).
+                //
+                // PATH_1B_PLAN.md Phase 6 replaces this with proper "queue
+                // exhausted" state owned by g0v0 (with an optional
+                // AUTO_CLONE_EXHAUSTED_QUEUE config flag), at which point this
+                // patch can be reverted to the upstream HostOnly-only check.
+                if (room.Playlist.All(item => item.Expired))
                     await addItem(db, CurrentItem.Clone());
             }
 
