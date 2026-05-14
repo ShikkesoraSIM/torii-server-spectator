@@ -945,7 +945,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
 
             await room.stopAllCountdowns<ForceGameplayStartCountdown>();
 
-            bool anyUserPlaying = false;
+            int playingUserCount = 0;
 
             // Start gameplay for users that are able to, and abort the others which cannot.
             foreach (var user in room.Users)
@@ -954,7 +954,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
                 {
                     await room.ChangeAndBroadcastUserState(user, MultiplayerUserState.Playing);
                     await room.eventDispatcher.PostGameplayStartedAsync(user.UserID);
-                    anyUserPlaying = true;
+                    playingUserCount++;
                 }
                 else if (user.State == MultiplayerUserState.WaitingForLoad)
                 {
@@ -964,8 +964,23 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
                 }
             }
 
+            bool anyUserPlaying = playingUserCount > 0;
+
             if (anyUserPlaying)
+            {
+                // Torii: seed the gameplay-player-count redis key BEFORE the
+                // room moves to Playing. g0v0's results-screen endpoint
+                // (/api/v2/rooms/{r}/playlist/{p}/scores/{s}) waits on this
+                // counter hitting 0 before including `scores_around` in the
+                // response — without the seed, the key never exists, the
+                // counter never reaches 0, and every multiplayer results
+                // screen shows ONLY the requesting user's own score (other
+                // players' scores never render). See MultiplayerEventDispatcher
+                // .SeedGameplayPlayerCountAsync for the full mechanism.
+                await room.eventDispatcher.SeedGameplayPlayerCountAsync(room.RoomID, playingUserCount);
+
                 await room.changeRoomState(MultiplayerRoomState.Playing);
+            }
             else
             {
                 await room.changeRoomState(MultiplayerRoomState.Open);

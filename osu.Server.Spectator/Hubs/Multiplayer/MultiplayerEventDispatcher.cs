@@ -20,6 +20,7 @@ using osu.Server.Spectator.Database.Models;
 using osu.Server.Spectator.Hubs.Referee;
 using osu.Server.Spectator.Hubs.Referee.Models;
 using osu.Server.Spectator.Hubs.Referee.Models.Events;
+using StackExchange.Redis;
 using MatchType = osu.Server.Spectator.Hubs.Referee.Models.MatchType;
 
 namespace osu.Server.Spectator.Hubs.Multiplayer
@@ -38,18 +39,63 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
         private readonly IDatabaseFactory databaseFactory;
         private readonly IHubContext<MultiplayerHub> multiplayerHubContext;
         private readonly IHubContext<RefereeHub> refereeHubContext;
+        private readonly IConnectionMultiplexer redis;
         private readonly ILogger<MultiplayerEventDispatcher> logger;
 
         public MultiplayerEventDispatcher(
             IDatabaseFactory databaseFactory,
             IHubContext<MultiplayerHub> multiplayerHubContext,
             IHubContext<RefereeHub> refereeHubContext,
+            IConnectionMultiplexer redis,
             ILoggerFactory loggerFactory)
         {
             this.databaseFactory = databaseFactory;
             this.multiplayerHubContext = multiplayerHubContext;
             this.refereeHubContext = refereeHubContext;
+            this.redis = redis;
             logger = loggerFactory.CreateLogger<MultiplayerEventDispatcher>();
+        }
+
+        /// <summary>
+        /// Torii: seed the redis counter that g0v0's
+        /// <c>GET /api/v2/rooms/{room_id}/playlist/{playlist_id}/scores/{score_id}</c>
+        /// uses to decide whether the multiplayer match has fully completed.
+        /// While the counter is &gt; 0, the response omits <c>scores_around</c>
+        /// (so the requesting client only sees its own score). The counter
+        /// decrements every time a score lands in <c>playlist_best_scores</c>
+        /// (see <c>g0v0-server/app/database/playlist_best_score.py:95</c>) —
+        /// when it hits 0, the response includes <c>scores_around</c> and
+        /// the multiplayer results screen finally renders every player's
+        /// score.
+        ///
+        /// The counter is keyed by room (NOT by playlist item) because the
+        /// g0v0 reader checks <c>multiplayer:{room_id}:gameplay:players</c>.
+        /// 10-minute TTL is an upper-bound safety net: if a player crashes
+        /// mid-round without ever submitting a score, the counter would
+        /// otherwise stall forever and every subsequent round on the room
+        /// would never render full results. Replaced by the next round's
+        /// own seed when gameplay restarts.
+        /// </summary>
+        /// <param name="roomId">The room whose gameplay round is starting.</param>
+        /// <param name="playerCount">Number of users transitioning to Playing state for this round.</param>
+        public async Task SeedGameplayPlayerCountAsync(long roomId, int playerCount)
+        {
+            try
+            {
+                await redis.GetDatabase().StringSetAsync(
+                    $"multiplayer:{roomId}:gameplay:players",
+                    playerCount.ToString(),
+                    TimeSpan.FromMinutes(10));
+            }
+            catch (Exception ex)
+            {
+                // Redis failure shouldn't block gameplay — the worst case is
+                // that the g0v0 reader doesn't see the counter and falls back
+                // to omitting scores_around. The client's results screen
+                // still shows the local user's own score; only the OTHER
+                // players' scores are missing until they refresh / rejoin.
+                logger.LogWarning(ex, "Failed to seed gameplay player count for room {RoomId}", roomId);
+            }
         }
 
         /// <summary>
