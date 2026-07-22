@@ -46,7 +46,7 @@ namespace osu.Server.Spectator.Tests.RankedPlay
                     {
                         type = database_match_type.ranked_play,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = int.Parse(Hub.Context.UserIdentifier!),
+                        host_id = int.Parse(Hub.Context.UserIdentifier!),
                     });
 
             Database.Setup(db => db.GetMatchmakingUserStatsAsync(It.IsAny<int>(), It.IsAny<uint>()))
@@ -56,8 +56,8 @@ namespace osu.Server.Spectator.Tests.RankedPlay
                         pool_id = poolId
                     }));
 
-            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>()))
-                    .Returns<long>(_ => Task.FromResult<IEnumerable<SoloScore>>(
+            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>()))
+                    .Returns<long, long>((_, _) => Task.FromResult<IEnumerable<SoloScore>>(
                     [
                         new SoloScore { user_id = USER_ID, total_score = 1_000_000 },
                         new SoloScore { user_id = USER_ID_2, total_score = 1_000_000 },

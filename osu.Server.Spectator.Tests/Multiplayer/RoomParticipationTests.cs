@@ -31,7 +31,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     .ReturnsAsync(new multiplayer_room
                     {
                         password = "password",
-                        user_id = USER_ID
+                        host_id = USER_ID
                     });
 
             await Hub.CreateRoom(new MultiplayerRoom(ROOM_ID) { Settings = { Password = "password" } });
@@ -48,7 +48,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     .ReturnsAsync(new multiplayer_room
                     {
                         password = "password",
-                        user_id = USER_ID
+                        host_id = USER_ID
                     });
 
             await Hub.CreateRoom(new MultiplayerRoom(ROOM_ID) { Settings = { Password = "password" } });
@@ -75,7 +75,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     .ReturnsAsync(new multiplayer_room
                     {
                         ends_at = DateTimeOffset.Now.AddMinutes(-5),
-                        user_id = USER_ID
+                        host_id = USER_ID
                     });
 
             await Assert.ThrowsAsync<InvalidStateException>(() => Hub.JoinRoom(ROOM_ID));
@@ -203,7 +203,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     {
                         type = database_match_type.head_to_head,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = USER_ID,
+                        host_id = USER_ID,
                     });
 
             SetUserContext(ContextUser2); // not the correct user to join the game first; triggers host mismatch failure.

@@ -36,7 +36,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
                     {
                         type = database_match_type.matchmaking,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = int.Parse(Hub.Context.UserIdentifier!),
+                        host_id = int.Parse(Hub.Context.UserIdentifier!),
                     });
 
             Database.Setup(db => db.GetMatchmakingUserStatsAsync(It.IsAny<int>(), It.IsAny<uint>()))
@@ -59,7 +59,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
         [Fact]
         public async Task NormalRoomFlow()
         {
-            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
+            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
             [
                 new SoloScore
                 {
@@ -531,7 +531,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
             AppSettings.MatchmakingRoomRounds = 5;
             AppSettings.MatchmakingHeadToHeadIsBestOf = true;
 
-            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
+            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
             [
                 new SoloScore
                 {
@@ -612,7 +612,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
             for (int i = 0; i < 5; i++)
             {
                 int i2 = i;
-                Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
+                Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
                 [
                     new SoloScore
                     {
@@ -718,7 +718,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
                 totalRounds = 1;
             }
 
-            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
+            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
             [
                 new SoloScore
                 {
@@ -805,7 +805,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
         [Fact]
         public async Task MissingScoreIsTreatedAsZero()
         {
-            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
+            Database.Setup(db => db.GetAllScoresForPlaylistItem(It.IsAny<long>(), It.IsAny<long>())).Returns(() => Task.FromResult((IEnumerable<SoloScore>)
             [
                 new SoloScore
                 {

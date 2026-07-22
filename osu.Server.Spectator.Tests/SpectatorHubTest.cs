@@ -22,6 +22,7 @@ using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Hubs;
 using osu.Server.Spectator.Hubs.Spectator;
 using osu.Server.Spectator.Storage;
+using StackExchange.Redis;
 using Xunit;
 
 namespace osu.Server.Spectator.Tests
@@ -65,7 +66,10 @@ namespace osu.Server.Spectator.Tests
 
             var mockScoreProcessedSubscriber = new Mock<IScoreProcessedSubscriber>();
 
-            hub = new SpectatorHub(loggerFactory.Object, clientStates, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object);
+            var redis = new Mock<IConnectionMultiplexer>();
+            redis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(new Mock<IDatabase>().Object);
+
+            hub = new SpectatorHub(loggerFactory.Object, clientStates, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object, redis.Object);
         }
 
         [Fact]

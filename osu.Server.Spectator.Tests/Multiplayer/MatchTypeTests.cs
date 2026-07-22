@@ -143,7 +143,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     {
                         type = database_match_type.team_versus,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = USER_ID,
+                        host_id = USER_ID,
                     });
 
             await Hub.JoinRoom(ROOM_ID);

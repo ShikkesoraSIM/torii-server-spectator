@@ -20,6 +20,7 @@ using osu.Server.Spectator.Hubs.Multiplayer;
 using osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue;
 using osu.Server.Spectator.Hubs.Referee;
 using osu.Server.Spectator.Services;
+using StackExchange.Redis;
 
 namespace osu.Server.Spectator.Tests.Multiplayer
 {
@@ -157,13 +158,17 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                          .Returns(new Mock<ILogger>().Object);
 
             LegacyIO = new Mock<ISharedInterop>();
-            LegacyIO.Setup(io => io.CreateRoomAsync(It.IsAny<int>(), It.IsAny<MultiplayerRoom>(), It.IsAny<bool>()))
-                    .Returns<int, MultiplayerRoom, bool>((_, room, _) => Task.FromResult(room.RoomID));
+            LegacyIO.Setup(io => io.CreateRoomAsync(It.IsAny<int>(), It.IsAny<MultiplayerRoom>()))
+                    .Returns<int, MultiplayerRoom>((_, room) => Task.FromResult(room.RoomID));
+
+            var redis = new Mock<IConnectionMultiplexer>();
+            redis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(new Mock<IDatabase>().Object);
 
             EventDispatcher = new MultiplayerEventDispatcher(
                 DatabaseFactory.Object,
                 multiplayerHubContext.Object,
                 refereeHubContext.Object,
+                redis.Object,
                 LoggerFactory.Object);
 
             RoomController = new MultiplayerRoomController(
@@ -279,7 +284,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     {
                         type = database_match_type.head_to_head,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = int.Parse(Hub.Context.UserIdentifier!),
+                        host_id = int.Parse(Hub.Context.UserIdentifier!),
                     });
 
             Database.Setup(db => db.GetRealtimeRoomAsync(ROOM_ID_2))
@@ -288,7 +293,7 @@ namespace osu.Server.Spectator.Tests.Multiplayer
                     {
                         type = database_match_type.head_to_head,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = int.Parse(Hub.Context.UserIdentifier!)
+                        host_id = int.Parse(Hub.Context.UserIdentifier!)
                     });
 
             Database.Setup(db => db.GetBeatmapAsync(It.IsAny<int>()))

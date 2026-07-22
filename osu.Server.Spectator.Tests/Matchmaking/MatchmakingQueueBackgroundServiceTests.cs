@@ -30,7 +30,7 @@ namespace osu.Server.Spectator.Tests.Matchmaking
                     {
                         type = database_match_type.matchmaking,
                         ends_at = DateTimeOffset.Now.AddMinutes(5),
-                        user_id = int.Parse(Hub.Context.UserIdentifier!),
+                        host_id = int.Parse(Hub.Context.UserIdentifier!),
                     });
         }
 

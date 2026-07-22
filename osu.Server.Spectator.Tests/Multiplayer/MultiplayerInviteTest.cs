@@ -153,7 +153,7 @@ public class MultiplayerInviteTest : MultiplayerTest
                 .ReturnsAsync(new multiplayer_room
                 {
                     password = password,
-                    user_id = USER_ID
+                    host_id = USER_ID
                 });
 
         SetUserContext(ContextUser);
