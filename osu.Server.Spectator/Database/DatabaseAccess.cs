@@ -21,7 +21,13 @@ namespace osu.Server.Spectator.Database
     {
         private static bool dapperMapperInstalled;
         private static readonly object dapperMapperLock = new object();
-        // private MySqlConnection? openConnection;
+
+        // torii: fix del leak de conexiones. getConnectionAsync devuelve una conexion NUEVA por llamada,
+        // pero varios metodos lifted de upstream hacen `var conn = await getConnectionAsync()` sin disponerla
+        // (asumen el caching de openConnection que quedo comentado) -> se leakeaban al pool. trackeamos todas
+        // las que abre esta instancia y las disponemos en Dispose(); el doble-dispose de las que ya se cerraron
+        // con `await using` es idempotente (MySqlConnection lo tolera).
+        private readonly List<MySqlConnection> openedConnections = new List<MySqlConnection>();
         private readonly ILogger<DatabaseAccess> logger;
         private readonly ISharedInterop sharedInterop;
         private readonly ISpectatorBackendClient backend;
@@ -647,7 +653,22 @@ namespace osu.Server.Spectator.Database
 
         public void Dispose()
         {
-            // openConnection?.Dispose();
+            lock (openedConnections)
+            {
+                foreach (var connection in openedConnections)
+                {
+                    try
+                    {
+                        connection.Dispose();
+                    }
+                    catch
+                    {
+                        // ya disposeada (via `await using`) o en mal estado: idempotente, la ignoramos.
+                    }
+                }
+
+                openedConnections.Clear();
+            }
         }
 
 
@@ -689,6 +710,10 @@ namespace osu.Server.Spectator.Database
 
             var connection = new MySqlConnection(connectionString);
             await connection.OpenAsync();
+
+            lock (openedConnections)
+                openedConnections.Add(connection);
+
             return connection;
         }
 
@@ -841,19 +866,28 @@ namespace osu.Server.Spectator.Database
         /// This should be used sparingly as it queries full rows.
         /// </remarks>
 
-        public async Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId)
+        public async Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long roomId, long playlistItemId)
         {
             // Torii: g0v0 doesn't have osu-web's `multiplayer_score_links` join table.
             // The (item → score) mapping lives on `score_tokens.playlist_item_id` instead,
             // and only rows whose `score_id` is non-null have actually been finalised.
+            // OJO CRITICO: g0v0 usa `room_playlists.id` LOCAL por sala (0,1,2 por room),
+            // NO un id global. Asi que `playlist_item_id` COLISIONA entre salas (el "item 0"
+            // de cada match tiene el mismo id). Sin filtrar por room_id, el ResultsStage
+            // juntaba scores de TODOS los matches -> maxScore con el max historico -> los dos
+            // morian -> DRAW eterno, y el wait nunca cortaba (esperaba 10s siempre -> lock
+            // timeout de 5s -> ChangeState error -> desconexiones). Filtrar por room_id lo
+            // aisla al match actual y arregla las dos cosas de un saque.
             var connection = await getConnectionAsync();
 
             return (await connection.QueryAsync<SoloScore>(
                 "SELECT `scores`.* FROM `scores` "
                 + "JOIN `score_tokens` ON `score_tokens`.`score_id` = `scores`.`id` "
-                + "WHERE `score_tokens`.`playlist_item_id` = @playlistItemId "
+                + "WHERE `score_tokens`.`room_id` = @roomId "
+                + "  AND `score_tokens`.`playlist_item_id` = @playlistItemId "
                 + "  AND `score_tokens`.`score_id` IS NOT NULL", new
                 {
+                    roomId = roomId,
                     playlistItemId = playlistItemId
                 }));
         }
@@ -1056,7 +1090,14 @@ namespace osu.Server.Spectator.Database
                   JOIN `beatmaps` b ON p.beatmap_id = b.id
                   WHERE p.pool_id = @PoolId
                     AND p.beatmap_id = @BeatmapId
-                    AND p.mods = @Mods", new
+                    -- `mods` es una columna JSON. Comparar contra el parametro string directo
+                    -- (`p.mods = '[]'`) NUNCA matchea en MySQL: el `[]` guardado es JSON y el
+                    -- parametro es texto, y `=` no auto-castea -> 0 filas para TODOS los mapas
+                    -- curados (guardan mods json `[]`). Eso hacia caer el lookup a null en cada
+                    -- ronda -> GlobalBeatmaps[id] (que no tiene curados) tiraba y abortaba el
+                    -- results stage. CAST normaliza ambos lados a JSON (ademas tolera orden de
+                    -- claves / whitespace en mods reales tipo `[{""acronym"":""HD""}]`).
+                    AND p.mods = CAST(@Mods AS JSON)", new
             {
                 PoolId = poolId,
                 BeatmapId = beatmapId,
@@ -1068,15 +1109,21 @@ namespace osu.Server.Spectator.Database
         {
             var conn = await getConnectionAsync();
 
-            await conn.ExecuteAsync("INSERT INTO `matchmaking_pool_beatmaps` (pool_id, beatmap_id, mods, rating, rating_sig) "
-                                    + "VALUES (@PoolId, @BeatmapId, @Mods, @Rating, @RatingSig) "
+            await conn.ExecuteAsync("INSERT INTO `matchmaking_pool_beatmaps` (pool_id, beatmap_id, mods, rating, rating_sig, selection_count) "
+                                    + "VALUES (@PoolId, @BeatmapId, @Mods, @Rating, @RatingSig, @SelectionCount) "
                                     + "ON DUPLICATE KEY UPDATE rating = @Rating, rating_sig = @RatingSig", new
             {
                 PoolId = beatmap.pool_id,
                 BeatmapId = beatmap.beatmap_id,
-                Mods = beatmap.mods,
+                // el pool global (backfill FA) arma beatmaps sin mods -> "" rompe la
+                // columna JSON de mysql al escribir el rating. normalizamos a "[]".
+                Mods = string.IsNullOrEmpty(beatmap.mods) ? "[]" : beatmap.mods,
                 Rating = beatmap.rating,
-                RatingSig = beatmap.rating_sig
+                RatingSig = beatmap.rating_sig,
+                // selection_count no tiene default en la DB -> sin esto el INSERT de un
+                // mapa nuevo (backfill FA) tira "doesn't have a default value" y tumba
+                // el background service -> StopHost -> se reinicia el server ENTERO.
+                SelectionCount = beatmap.selection_count
             });
         }
 
@@ -1159,19 +1206,24 @@ namespace osu.Server.Spectator.Database
         {
             var connection = await getConnectionAsync();
 
-            await connection.ExecuteAsync("INSERT INTO `matchmaking_user_stats` (`user_id`, `pool_id`, `first_placements`, `total_points`, `elo_data`, `created_at`, `updated_at`) "
-                                          + "VALUES (@UserId, @PoolId, @FirstPlacements, @TotalPoints, @EloData, NOW(), NOW()) "
+            await connection.ExecuteAsync("INSERT INTO `matchmaking_user_stats` (`user_id`, `pool_id`, `first_placements`, `total_points`, `elo_data`, `rating`, `plays`, `created_at`, `updated_at`) "
+                                          + "VALUES (@UserId, @PoolId, @FirstPlacements, @TotalPoints, @EloData, @Rating, @Plays, NOW(), NOW()) "
                                           + "ON DUPLICATE KEY UPDATE "
                                           + "`first_placements` = @FirstPlacements, "
                                           + "`total_points` = @TotalPoints, "
                                           + "`elo_data` = @EloData, "
+                                          + "`rating` = @Rating, "
+                                          + "`plays` = @Plays, "
                                           + "`updated_at` = NOW()", new
             {
                 UserId = stats.user_id,
                 PoolId = stats.pool_id,
                 FirstPlacements = stats.first_placements,
                 TotalPoints = stats.total_points,
-                EloData = stats.elo_data
+                EloData = stats.elo_data,
+                // el rating int se deriva SIEMPRE del mu de OpenSkill (cubre seed y match).
+                Rating = (int)Math.Round(stats.EloData.Rating.Mu),
+                Plays = stats.plays
             });
         }
 
