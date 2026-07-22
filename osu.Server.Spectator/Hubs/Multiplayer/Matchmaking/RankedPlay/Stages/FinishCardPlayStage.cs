@@ -31,16 +31,22 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
             Debug.Assert(State.ActiveUserId != null);
             Debug.Assert(Controller.LastActivatedCard != null);
 
-            if (allPlayersReady())
+            if (Room.Users.All(isPlayerReady))
                 await Controller.GotoStage(RankedPlayStage.GameplayWarmup);
             else
             {
-                await Controller.RemoveCards(State.ActiveUserId.Value, [Controller.LastActivatedCard]);
+                // 100k HP al que no tiene el mapa a tiempo, pero solo si al menos un jugador SI
+                // lo tiene (si los dos fallaron, no penalizamos a nadie). el danio escala con el
+                // multiplier de la ronda. OJO: "ready" aca es SOLO tener el beatmap (mismo predicado
+                // que el gate del stage); el predicado estricto (LocallyAvailable && Ready) dejaba
+                // escapar de la penalidad al que ni siquiera bajo el mapa.
+                if (Room.Users.Any(isPlayerReady))
+                {
+                    foreach (var player in Room.Users.Where(u => !isPlayerReady(u)))
+                        Controller.Damage(player.UserID, 100_000, State.DamageMultiplier);
+                }
 
-                // Subtract 100K HP from every player that failed to load the beatmap in time.
-                // Although this seems unfair, it means that players are not able to purposefully block the others' picks.
-                foreach (var player in Room.Users.Where(p => p.BeatmapAvailability.State != DownloadState.LocallyAvailable))
-                    Controller.Damage(player.UserID, 100_000);
+                await Controller.RemoveCards(State.ActiveUserId.Value, [Controller.LastActivatedCard]);
 
                 if (HasGameplayRoundsRemaining())
                     await Controller.GotoStage(RankedPlayStage.RoundWarmup);
@@ -56,14 +62,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
 
         private async Task continueWhenAllPlayersReady()
         {
-            if (allPlayersReady())
+            if (Room.Users.All(isPlayerReady))
                 await Finish();
         }
 
         /// <summary>
         /// Only requires players to have the beatmap, but not necessarily have it loaded yet.
         /// </summary>
-        private bool allPlayersReady()
-            => Room.Users.All(u => u.BeatmapAvailability.State == DownloadState.LocallyAvailable);
+        private bool isPlayerReady(MultiplayerRoomUser user)
+            => user.BeatmapAvailability.State == DownloadState.LocallyAvailable;
     }
 }

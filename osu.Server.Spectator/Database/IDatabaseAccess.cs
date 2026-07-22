@@ -262,7 +262,7 @@ namespace osu.Server.Spectator.Database
 
         Task<bool> AnyScoreTokenExistsFor(long roomId, long playlistItemId);
 
-        Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long playlistItemId);
+        Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long roomId, long playlistItemId);
 
         Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId);
 

@@ -130,6 +130,9 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
                     OwnerID = AppSettings.BanchoBotUserId,
                     BeatmapID = beatmaps.Length > 0 ? (int)beatmaps[0].beatmap_id : 0,
                     RulesetID = (int)pool.ruleset_id,
+                    // torii FREEMODS: mismo whitelist que ToPlaylistItem, para que el mod-select del
+                    // warmup ya sea aceptado antes de que la primera carta reemplace este placeholder.
+                    AllowedMods = RankedPlayFreeMods.ForRuleset((int)pool.ruleset_id),
                 };
                 initialItem.ID = await db.AddPlaylistItemAsync(new multiplayer_playlist_item(Room.RoomID, initialItem));
 
@@ -348,27 +351,32 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
         /// Causes a player to take damage.
         /// </summary>
         /// <param name="userId">The user ID of the player taking damage.</param>
-        /// <param name="amount">The amount of damage (before any multipliers are added) to take.</param>
+        /// <param name="directDamage">Direct damage (score-difference) before the multiplier.</param>
+        /// <param name="multiplier">The multiplier applied to the direct damage.</param>
+        /// <param name="bonusDamage">Flat bonus damage added AFTER the multiplier (the round-win bonus).</param>
         /// <returns>A descriptor for the damage taken.</returns>
-        public RankedPlayDamageInfo Damage(int userId, int amount)
+        public RankedPlayDamageInfo Damage(int userId, int directDamage = 0, double multiplier = 1, int bonusDamage = 0)
         {
             RankedPlayUserInfo userInfo = State.Users[userId];
 
-            int rawDamage = amount;
-            int damage = (int)Math.Ceiling(rawDamage * State.DamageMultiplier);
+            int totalDamage = (int)Math.Ceiling(directDamage * multiplier) + bonusDamage;
 
-            int oldLife = userInfo.Life;
-            int newLife = Math.Max(0, oldLife - damage);
-
-            userInfo.Life = newLife;
-
-            return new RankedPlayDamageInfo
+            RankedPlayDamageInfo damageInfo = new RankedPlayDamageInfo
             {
-                RawDamage = rawDamage,
-                Damage = damage,
-                OldLife = oldLife,
-                NewLife = newLife,
+                RawDamage = directDamage + bonusDamage,
+                Damage = totalDamage,
+                OldLife = userInfo.Life,
+                // anti-oneshot: si estas en HP FULL (1M) el minimo es 1, no 0. no te matan
+                // de un solo golpe teniendo la vida entera (upstream).
+                NewLife = Math.Max(userInfo.Life == 1_000_000 ? 1 : 0, userInfo.Life - totalDamage),
+                DirectDamage = directDamage,
+                Multiplier = multiplier,
+                BonusDamage = bonusDamage,
             };
+
+            userInfo.Life = damageInfo.NewLife;
+
+            return damageInfo;
         }
 
         public async Task HandleMatchCompleted()
@@ -447,6 +455,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
 
                         stats[i].EloData.ContestCount++;
                         stats[i].EloData.Rating = new EloRating(newRatings[i].Mu, newRatings[i].Sigma);
+                        stats[i].plays++;
                         await db.UpdateMatchmakingUserStatsAsync(stats[i]);
 
                         State.Users[(int)stats[i].user_id].RatingAfter = (int)Math.Round(newRatings[i].Mu);

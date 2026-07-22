@@ -42,7 +42,21 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
         {
             State.Stage = Stage;
 
-            await Begin();
+            // torii: el broadcast del cambio de stage (abajo) es lo que MUEVE a los clientes de
+            // una pantalla a la otra (ej: gameplay -> results). Si Begin() tira y dejamos
+            // propagar, ese broadcast nunca corre y los DOS clientes quedan colgados en el stage
+            // anterior para siempre (fue el bug del "gameplay in progress" eterno). Aislamos:
+            // logueamos el fallo de Begin() pero SIEMPRE broadcasteamos el stage, asi el match
+            // avanza pase lo que pase. Un stage con estado a medias es recuperable; un cuelgue no.
+            try
+            {
+                await Begin();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[rankedplay] Begin() del stage {Stage} tiro; sigo y broadcasteo el stage igual para no colgar el match: {ex}");
+            }
+
             await EventDispatcher.PostMatchRoomStateChangedAsync(Room);
 
             await FinishWithCountdown(Duration);

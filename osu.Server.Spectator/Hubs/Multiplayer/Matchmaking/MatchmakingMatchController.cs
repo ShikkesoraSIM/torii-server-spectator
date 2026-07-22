@@ -165,7 +165,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking
             // Collect all scores from the database.
             List<SoloScore> scores = [];
             using (var db = dbFactory.GetInstance())
-                scores.AddRange(await db.GetAllScoresForPlaylistItem(CurrentItem.ID));
+                scores.AddRange(await db.GetAllScoresForPlaylistItem(room.RoomID, CurrentItem.ID));
 
             // Add dummy scores for all users that did not play the map.
             foreach ((int userId, _) in state.Users.UserDictionary)
@@ -439,6 +439,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking
                 {
                     stats[i].EloData.ContestCount++;
                     stats[i].EloData.Rating = new EloRating(newRatings[i].Players.Single().Mu, newRatings[i].Players.Single().Sigma);
+                    stats[i].plays++;
                     await db.UpdateMatchmakingUserStatsAsync(stats[i]);
                 }
             }

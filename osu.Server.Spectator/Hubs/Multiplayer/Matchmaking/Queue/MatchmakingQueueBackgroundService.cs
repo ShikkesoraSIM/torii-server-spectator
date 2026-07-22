@@ -90,10 +90,21 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
             if (!poolQueues.TryGetValue((int)poolId, out MatchmakingQueue? queue))
                 return;
 
-            if (!poolSelectors.TryGetValue(poolId, out MatchmakingBeatmapSelector? selector))
-                poolSelectors[poolId] = selector = await MatchmakingBeatmapSelector.Initialise(queue.Pool, databaseFactory);
+            try
+            {
+                if (!poolSelectors.TryGetValue(poolId, out MatchmakingBeatmapSelector? selector))
+                    poolSelectors[poolId] = selector = await MatchmakingBeatmapSelector.Initialise(queue.Pool, databaseFactory);
 
-            await selector.AdjustRating(new MatchmakingBeatmapSelector.BeatmapLookupKey(beatmapId, mods.Length == 0 ? string.Empty : JsonConvert.SerializeObject(mods)), scores, ratings);
+                await selector.AdjustRating(new MatchmakingBeatmapSelector.BeatmapLookupKey(beatmapId, mods.Length == 0 ? "[]" : JsonConvert.SerializeObject(mods)), scores, ratings);
+            }
+            catch (Exception ex)
+            {
+                // torii: el ajuste de rating del mapa es CALIBRACION de dificultad, no afecta el
+                // resultado del match (el ELO de los jugadores se calcula aparte en el controller).
+                // Si algo aca tira (Initialise, o QuerySingleOrDefault con filas duplicadas ahora que
+                // el CAST matchea de verdad) logueamos y tragamos: NUNCA debe subir a ResultsStage.
+                logger.LogError(ex, "AdjustRating/Initialise del pool {PoolId} beatmap {BeatmapId} tiro; salteo la calibracion de rating de ese mapa", poolId, beatmapId);
+            }
         }
 
         public bool IsInQueue(MultiplayerClientState state)
@@ -249,7 +260,18 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                await ExecuteOnceAsync();
+                try
+                {
+                    await ExecuteOnceAsync();
+                }
+                catch (Exception ex)
+                {
+                    // red de seguridad final: una excepcion de un solo tick del matchmaking
+                    // JAMAS debe propagar al host (StopHost reinicia el server multiplayer
+                    // entero y mata todos los matches). se logea y el loop sigue vivo.
+                    logger.LogError(ex, "Unhandled exception in matchmaking queue tick.");
+                }
+
                 await Task.Delay(queue_update_rate, stoppingToken);
             }
         }
@@ -277,7 +299,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
                 logger.LogError(ex, "Failed to refresh the matchmaking queue.");
             }
 
-            await refreshPools();
+            try
+            {
+                await refreshPools();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to refresh the matchmaking pools.");
+            }
 
             foreach ((_, MatchmakingQueue queue) in poolQueues)
             {

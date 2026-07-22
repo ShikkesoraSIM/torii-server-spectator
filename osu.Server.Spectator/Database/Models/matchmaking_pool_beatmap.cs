@@ -8,6 +8,7 @@ using System.Diagnostics.CodeAnalysis;
 using Newtonsoft.Json;
 using osu.Game.Online.API;
 using osu.Game.Online.Rooms;
+using osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay;
 
 namespace osu.Server.Spectator.Database.Models
 {
@@ -18,7 +19,7 @@ namespace osu.Server.Spectator.Database.Models
         public uint id { get; set; }
         public uint pool_id { get; set; }
         public int beatmap_id { get; set; }
-        public string mods { get; set; } = string.Empty;
+        public string mods { get; set; } = "[]";
         public double rating { get; set; } = 1500;
         public double rating_sig = 150;
         public int selection_count { get; set; }
@@ -58,6 +59,10 @@ namespace osu.Server.Spectator.Database.Models
             RulesetID = playmode,
             StarRating = difficultyrating,
             RequiredMods = JsonConvert.DeserializeObject<APIMod[]>(mods ?? string.Empty) ?? [],
+            // torii FREEMODS: cada jugador puede elegir su propio set de free-mods (curado,
+            // pp-safe, sin rate mods). Freestyle queda false: la carta fija el beatmap/ruleset,
+            // solo los mods son libres. ver RankedPlayFreeMods.
+            AllowedMods = RankedPlayFreeMods.ForRuleset(playmode),
         };
 
         public bool Equals(matchmaking_pool_beatmap? other)

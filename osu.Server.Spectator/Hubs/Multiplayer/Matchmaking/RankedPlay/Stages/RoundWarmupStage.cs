@@ -29,7 +29,11 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
             }
 
             State.CurrentRound++;
-            State.DamageMultiplier = computeDamageMultiplier(State.CurrentRound);
+
+            // el multiplier sube GRADUAL: +0.5 por ronda desde la 2 (upstream). antes
+            // saltaba de 1 a 2 de golpe con computeDamageMultiplier.
+            if (State.CurrentRound > 1)
+                State.DamageMultiplier += 0.5;
 
             // Activate the next player.
             // For the first round, this is set during room initialisation.
@@ -49,16 +53,5 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
                 await Controller.GotoStage(RankedPlayStage.CardPlay);
         }
 
-        /// <summary>
-        /// Retrieves the damage multiplier for a given round.
-        /// </summary>
-        /// <param name="round">The round.</param>
-        private static double computeDamageMultiplier(int round)
-        {
-            if (round <= 2)
-                return 1;
-
-            return 2 + (round - 3) * 0.5;
-        }
     }
 }

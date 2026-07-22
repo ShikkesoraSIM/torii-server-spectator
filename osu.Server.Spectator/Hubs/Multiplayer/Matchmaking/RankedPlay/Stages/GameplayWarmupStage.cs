@@ -37,10 +37,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
             {
                 await Controller.RemoveCards(State.ActiveUserId.Value, [Controller.LastActivatedCard]);
 
-                // Subtract 100K HP from every player that failed to load the beatmap in time.
-                // Although this seems unfair, it means that players are not able to purposefully block the others' picks.
-                foreach (var player in Room.Users.Where(p => p.BeatmapAvailability.State != DownloadState.LocallyAvailable || p.State != MultiplayerUserState.Ready))
-                    Controller.Damage(player.UserID, 100_000);
+                // 100k HP al que no cargo el mapa a tiempo, PERO solo si al menos un
+                // jugador SI cargo (si los dos fallaron, no penalizamos a nadie). el danio
+                // ahora escala con el multiplier de la ronda (upstream).
+                if (Room.Users.Any(u => u.BeatmapAvailability.State == DownloadState.LocallyAvailable && u.State == MultiplayerUserState.Ready))
+                {
+                    foreach (var player in Room.Users.Where(u => u.BeatmapAvailability.State != DownloadState.LocallyAvailable || u.State != MultiplayerUserState.Ready))
+                        Controller.Damage(player.UserID, 100_000, State.DamageMultiplier);
+                }
 
                 if (HasGameplayRoundsRemaining())
                     await Controller.GotoStage(RankedPlayStage.RoundWarmup);

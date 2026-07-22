@@ -17,6 +17,12 @@ namespace osu.Server.Spectator.Database.Models
         public uint first_placements { get; set; }
         public uint total_points { get; set; }
 
+        // el rating int cache-eado (= round del mu de OpenSkill) y la cuenta de plays.
+        // el matchmaking los ignoraba: el leaderboard y el grafico de distribucion los leen
+        // (SELECT rating WHERE plays > 0) asi que sin esto salian vacios / con 1500 stale.
+        public int rating { get; set; }
+        public uint plays { get; set; }
+
         public string elo_data
         {
             get => JsonConvert.SerializeObject(EloData);
