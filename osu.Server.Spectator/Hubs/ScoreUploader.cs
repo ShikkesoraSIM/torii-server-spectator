@@ -22,7 +22,11 @@ namespace osu.Server.Spectator.Hubs
         /// Amount of time (in milliseconds) before any individual score times out if a score ID hasn't been set.
         /// This can happen if the user forcefully terminated the game before the API score submission request is sent, but after EndPlaySession() has been invoked.
         /// </summary>
-        public double TimeoutInterval = 30000;
+        // torii: 120s (era 30s). cinturon extra contra perdida de replays/scores: si por lo que sea
+        // g0v0 tarda en crear la fila del score (contencion de DB, pico de carga), el uploader espera
+        // mas en vez de dropear el item. la causa de raiz (indice compuesto faltante en
+        // lazer_user_statistics) ya se arreglo, esto es defensa en profundidad.
+        public double TimeoutInterval = 120000;
 
         public bool SaveReplays = AppSettings.SaveReplays;
 
