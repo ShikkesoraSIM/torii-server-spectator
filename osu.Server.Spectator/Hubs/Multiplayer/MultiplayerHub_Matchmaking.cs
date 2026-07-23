@@ -125,5 +125,24 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
                 room.MatchmakingSkipToNextStage(Context.GetUserId(), out _);
             }
         }
+
+        /// <summary>
+        /// torii GHOST CURSOR: el cliente manda su posicion de cursor (normalizada 0..1) mientras
+        /// esta en las pantallas de ranked play y la relayeamos al resto de su room tal cual.
+        /// Invocado por NOMBRE (el cliente hace SendAsync("RankedPlayCursor", x, y)) — no forma
+        /// parte de la interface tipada del hub a proposito, para no tocar el contrato del paquete.
+        /// </summary>
+        public async Task RankedPlayCursor(float x, float y)
+        {
+            using (var userUsage = await GetOrCreateLocalUserState())
+            {
+                long? roomId = userUsage.Item?.CurrentRoomID;
+
+                if (roomId == null)
+                    return;
+
+                await multiplayerEventDispatcher.RelayRankedPlayCursorAsync(roomId.Value, Context.GetUserId(), x, y, Context.ConnectionId);
+            }
+        }
     }
 }
