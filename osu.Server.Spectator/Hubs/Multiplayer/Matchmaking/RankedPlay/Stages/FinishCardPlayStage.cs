@@ -32,7 +32,10 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
             Debug.Assert(Controller.LastActivatedCard != null);
 
             if (Room.Users.All(isPlayerReady))
+            {
+                Controller.FailedPickStreak = 0;
                 await Controller.GotoStage(RankedPlayStage.GameplayWarmup);
+            }
             else
             {
                 // torii: si NADIE pudo tener el mapa, es casi seguro que el mapa esta roto (version
@@ -56,6 +59,19 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
                 }
 
                 await Controller.RemoveCards(State.ActiveUserId.Value, [Controller.LastActivatedCard]);
+
+                // torii RE-PICK JUSTO: el pick no se pudo jugar (mapa roto / sin mp3 / no descargable),
+                // asi que el que pickeo NO pierde el turno ni queda con una carta menos: le damos una
+                // carta de reemplazo y volvemos DIRECTO a CardPlay con el mismo ActiveUserId (el turno
+                // rota en RoundWarmup — salteandolo, el pick queda en la misma persona y la ronda no se
+                // consume). Cap de 3 fallos seguidos como guarda anti-loop: si algo hace fallar todo,
+                // el match sigue avanzando por el camino viejo.
+                if (++Controller.FailedPickStreak <= 3 && HasGameplayRoundsRemaining())
+                {
+                    await Controller.AddCards(State.ActiveUserId.Value, 1);
+                    await Controller.GotoStage(RankedPlayStage.CardPlay);
+                    return;
+                }
 
                 if (HasGameplayRoundsRemaining())
                     await Controller.GotoStage(RankedPlayStage.RoundWarmup);

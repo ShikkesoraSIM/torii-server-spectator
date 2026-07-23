@@ -76,6 +76,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
         /// </summary>
         public bool UserRatingsUpdated { get; set; }
 
+        /// <summary>
+        /// torii: picks fallidos CONSECUTIVOS (el mapa del pick no se pudo jugar — roto, sin mp3,
+        /// no descargable). Con esto FinishCardPlayStage le devuelve el turno al que pickeo (con
+        /// carta de reemplazo) en vez de saltarle el turno; el cap evita un loop infinito si algo
+        /// hace fallar todos los picks. Se resetea cuando un pick llega a gameplay.
+        /// </summary>
+        public int FailedPickStreak { get; set; }
+
         public RankedPlayMatchController(ServerMultiplayerRoom room, IDatabaseFactory dbFactory, MultiplayerEventDispatcher eventDispatcher)
         {
             Room = room;
