@@ -29,6 +29,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         private const int flagged_exclusion_threshold = 3;
 
         /// <summary>
+        /// Si la pool curada tiene al menos esta cantidad de mapas, NO backfilleamos la seleccion con
+        /// todo el ranked global (serian miles): la pool curada ya trae variedad de categorias + cobertura
+        /// de SR, y queremos que la seleccion quede acotada a esos mapas. Por debajo (bring-up / pool casi
+        /// vacia) si backfilleamos para que la cola nunca quede sin mapas.
+        /// </summary>
+        private const int curated_pool_min_size = 200;
+
+        /// <summary>
         /// Contains all ranked beatmaps.
         /// </summary>
         public Dictionary<int, matchmaking_pool_beatmap> GlobalBeatmaps { get; init; } = [];
@@ -83,8 +91,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
                     poolBeatmaps[new BeatmapLookupKey(b.beatmap_id, b.mods)] = b;
 
                 // The pool may not contain all ranked beatmaps, so back-fill it.
-                foreach ((int beatmapId, matchmaking_pool_beatmap beatmap) in globalBeatmaps)
-                    poolBeatmaps.TryAdd(new BeatmapLookupKey(beatmapId, string.Empty), beatmap);
+                // torii: SOLO si la pool curada es chica. Con una pool curada decente (cientos de mapas,
+                // categorias + cobertura de SR) NO backfilleamos: la seleccion queda en esos mapas en vez
+                // de miles de ranked globales. GlobalBeatmaps sigue lleno para el fallback de AdjustRating.
+                if (poolBeatmaps.Count < curated_pool_min_size)
+                {
+                    foreach ((int beatmapId, matchmaking_pool_beatmap beatmap) in globalBeatmaps)
+                        poolBeatmaps.TryAdd(new BeatmapLookupKey(beatmapId, string.Empty), beatmap);
+                }
 
                 // torii: sacamos los mapas flaggeados como no-jugables (version local != online) que ya
                 // pasaron el umbral. Aca (una vez, al inicializar el selector cacheado por pool) alcanza:
