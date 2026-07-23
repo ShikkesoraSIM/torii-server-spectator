@@ -811,6 +811,17 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
         #endregion
 
         /// <summary>
+        /// torii GHOST CURSOR: relayea la posicion de cursor (normalizada 0..1) de un jugador al
+        /// resto de su room. Va por NOMBRE de metodo (SendAsync crudo, mismo mecanismo que
+        /// MatchmakingRoomReady) — no toca los tipos MessagePack del paquete de ppy, asi que es
+        /// aditivo: un cliente que no registra el handler simplemente no lo ve. Sin estado ni
+        /// persistencia; ~30 msg/s por jugador de dos floats, costo despreciable.
+        /// </summary>
+        public Task RelayRankedPlayCursorAsync(long roomId, int userId, float x, float y, string excludeConnectionId)
+            => multiplayerHubContext.Clients.GroupExcept(GetGroupId(roomId), excludeConnectionId)
+                                    .SendAsync(@"RankedPlayCursor", userId, x, y);
+
+        /// <summary>
         /// Get the group ID to be used for multiplayer messaging for the given room.
         /// </summary>
         /// <param name="roomId">The databased room ID.</param>
