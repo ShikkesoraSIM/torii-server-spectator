@@ -822,6 +822,20 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
                                     .SendAsync(@"RankedPlayCursor", userId, x, y);
 
         /// <summary>
+        /// torii DIBUJITO: relayea un chunk de trazo de la pizarra de ranked play. Mismo mecanismo
+        /// aditivo que el ghost cursor (SendAsync por nombre, sin tipos nuevos). El trazo se arma
+        /// del lado del cliente por (userId, strokeId); aca solo pasan puntos normalizados.
+        /// </summary>
+        public Task RelayRankedPlayDrawStrokeAsync(long roomId, int userId, int strokeId, float[] xs, float[] ys, int colour, float thickness, bool done, string excludeConnectionId)
+            => multiplayerHubContext.Clients.GroupExcept(GetGroupId(roomId), excludeConnectionId)
+                                    .SendAsync(@"RankedPlayDrawStroke", userId, strokeId, xs, ys, colour, thickness, done);
+
+        /// <summary>torii DIBUJITO: relayea el "borre todos mis trazos" de un jugador.</summary>
+        public Task RelayRankedPlayDrawClearAsync(long roomId, int userId, string excludeConnectionId)
+            => multiplayerHubContext.Clients.GroupExcept(GetGroupId(roomId), excludeConnectionId)
+                                    .SendAsync(@"RankedPlayDrawClear", userId);
+
+        /// <summary>
         /// Get the group ID to be used for multiplayer messaging for the given room.
         /// </summary>
         /// <param name="roomId">The databased room ID.</param>
