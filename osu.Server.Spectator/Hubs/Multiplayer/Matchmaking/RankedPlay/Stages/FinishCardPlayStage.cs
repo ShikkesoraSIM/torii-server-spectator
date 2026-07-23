@@ -35,6 +35,15 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay.Stages
                 await Controller.GotoStage(RankedPlayStage.GameplayWarmup);
             else
             {
+                // torii: si NADIE pudo tener el mapa, es casi seguro que el mapa esta roto (version
+                // local != online), no que los dos jugadores tengan mala conexion. Lo flaggeamos: con
+                // suficientes flags de matches distintos el selector lo saca solo del pool (ver
+                // MatchmakingBeatmapSelector.flagged_exclusion_threshold). No penalizamos a nadie en ese
+                // caso — abajo el danio 100k solo aplica cuando AL MENOS UNO si lo tuvo (anti-abuso: que
+                // no te salves de un pick fuerte "no bajando" el mapa).
+                if (!Room.Users.Any(isPlayerReady))
+                    await Controller.FlagCurrentBeatmapUnplayable();
+
                 // 100k HP al que no tiene el mapa a tiempo, pero solo si al menos un jugador SI
                 // lo tiene (si los dos fallaron, no penalizamos a nadie). el danio escala con el
                 // multiplier de la ronda. OJO: "ready" aca es SOLO tener el beatmap (mismo predicado

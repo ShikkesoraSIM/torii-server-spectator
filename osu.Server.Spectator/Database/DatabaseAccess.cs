@@ -1105,6 +1105,33 @@ namespace osu.Server.Spectator.Database
             });
         }
 
+        public async Task FlagMatchmakingBeatmapAsync(uint poolId, int beatmapId)
+        {
+            var conn = await getConnectionAsync();
+
+            // upsert: primer flag inserta con count=1, los siguientes incrementan. UNIQUE(pool_id, beatmap_id).
+            await conn.ExecuteAsync(
+                @"INSERT INTO `matchmaking_flagged_beatmaps` (pool_id, beatmap_id, flagged_count, last_flagged_at)
+                  VALUES (@PoolId, @BeatmapId, 1, NOW())
+                  ON DUPLICATE KEY UPDATE flagged_count = flagged_count + 1, last_flagged_at = NOW()", new
+                {
+                    PoolId = poolId,
+                    BeatmapId = beatmapId
+                });
+        }
+
+        public async Task<int[]> GetFlaggedMatchmakingBeatmapIdsAsync(uint poolId, int threshold)
+        {
+            var conn = await getConnectionAsync();
+
+            return (await conn.QueryAsync<int>(
+                "SELECT beatmap_id FROM `matchmaking_flagged_beatmaps` WHERE pool_id = @PoolId AND flagged_count >= @Threshold", new
+                {
+                    PoolId = poolId,
+                    Threshold = threshold
+                })).ToArray();
+        }
+
         public async Task UpdateMatchmakingPoolBeatmapRatingAsync(matchmaking_pool_beatmap beatmap)
         {
             var conn = await getConnectionAsync();

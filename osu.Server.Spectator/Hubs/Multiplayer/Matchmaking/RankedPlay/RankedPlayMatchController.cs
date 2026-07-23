@@ -310,6 +310,24 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
         }
 
         /// <summary>
+        /// torii: marca el beatmap del pick actual como no-jugable (ningun jugador pudo tener la version
+        /// online -> mapa roto). El selector lo excluye del pool cuando junta suficientes flags de matches
+        /// distintos. No falla el match si el flag no se puede escribir: es best-effort.
+        /// </summary>
+        public async Task FlagCurrentBeatmapUnplayable()
+        {
+            try
+            {
+                using (var db = DbFactory.GetInstance())
+                    await db.FlagMatchmakingBeatmapAsync(PoolId, CurrentItem.BeatmapID);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[matchmaking] no se pudo flaggear el beatmap {CurrentItem.BeatmapID} del pool {PoolId}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Activates the card, placing its effect on the room.
         /// </summary>
         public async Task ActivateCard(RankedPlayCardItem card)
@@ -444,21 +462,31 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
                         else
                             result = matchmaking_room_result.loss;
 
+                        int eloBefore = (int)Math.Round(stats[i].EloData.Rating.Mu);
+                        int eloAfter = (int)Math.Round(newRatings[i].Mu);
+
                         await db.InsertUserEloHistoryEntry(
                             (ulong)Room.RoomID,
                             PoolId,
                             stats[i].user_id,
                             stats.First(u => u.user_id != stats[i].user_id).user_id,
                             result,
-                            (int)Math.Round(stats[i].EloData.Rating.Mu),
-                            (int)Math.Round(newRatings[i].Mu));
+                            eloBefore,
+                            eloAfter);
 
                         stats[i].EloData.ContestCount++;
                         stats[i].EloData.Rating = new EloRating(newRatings[i].Mu, newRatings[i].Sigma);
                         stats[i].plays++;
                         await db.UpdateMatchmakingUserStatsAsync(stats[i]);
 
-                        State.Users[(int)stats[i].user_id].RatingAfter = (int)Math.Round(newRatings[i].Mu);
+                        // torii: el "antes" que muestra el cliente (EndedScreen hace RatingAfter - Rating)
+                        // DEBE salir de la misma fuente que el "despues": el mu fresco de la DB que usa el
+                        // calculo de elo. Antes, Rating se seteaba al ARRANCAR el match desde el rating de la
+                        // cola (otra escala) y RatingAfter desde el mu de la DB al terminar -> un perdedor con
+                        // -27 real mostraba +300 en verde. Ahora los dos salen de stats y el delta = el cambio
+                        // real de elo (el mismo que va a matchmaking_user_elo_history).
+                        State.Users[(int)stats[i].user_id].Rating = eloBefore;
+                        State.Users[(int)stats[i].user_id].RatingAfter = eloAfter;
                     }
                 }
             }

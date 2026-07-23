@@ -22,6 +22,13 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         private const double osu_beatmap_proportion = 1 / 12.0;
 
         /// <summary>
+        /// Cuantos flags (matches distintos donde un jugador no pudo tener la version online del mapa)
+        /// hacen falta para excluir un mapa del pool. &gt;1 para no sacar un mapa por un solo downloader
+        /// lento; un mapa GENUINAMENTE roto lo flaggean varios matches y cruza el umbral solo.
+        /// </summary>
+        private const int flagged_exclusion_threshold = 3;
+
+        /// <summary>
         /// Contains all ranked beatmaps.
         /// </summary>
         public Dictionary<int, matchmaking_pool_beatmap> GlobalBeatmaps { get; init; } = [];
@@ -78,6 +85,23 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
                 // The pool may not contain all ranked beatmaps, so back-fill it.
                 foreach ((int beatmapId, matchmaking_pool_beatmap beatmap) in globalBeatmaps)
                     poolBeatmaps.TryAdd(new BeatmapLookupKey(beatmapId, string.Empty), beatmap);
+
+                // torii: sacamos los mapas flaggeados como no-jugables (version local != online) que ya
+                // pasaron el umbral. Aca (una vez, al inicializar el selector cacheado por pool) alcanza:
+                // un mapa recien flaggeado se excluye en el proximo (re)arranque del selector, y el flag
+                // se acumula igual entre matches. filtramos tanto la pool curada como el backfill global.
+                int[] flagged = await db.GetFlaggedMatchmakingBeatmapIdsAsync(pool.id, flagged_exclusion_threshold);
+
+                if (flagged.Length > 0)
+                {
+                    var flaggedSet = flagged.ToHashSet();
+
+                    foreach (var key in poolBeatmaps.Keys.Where(k => flaggedSet.Contains(k.BeatmapId)).ToArray())
+                        poolBeatmaps.Remove(key);
+
+                    foreach (int id in flagged)
+                        globalBeatmaps.Remove(id);
+                }
 
                 return new MatchmakingBeatmapSelector(pool, poolBeatmaps, dbFactory)
                 {

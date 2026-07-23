@@ -280,6 +280,17 @@ namespace osu.Server.Spectator.Database
 
         Task UpdateMatchmakingPoolBeatmapRatingAsync(matchmaking_pool_beatmap beatmap);
 
+        /// <summary>
+        /// Marca un mapa como no-jugable (la version local no matchea la online). Incrementa el contador;
+        /// el selector excluye los que pasan el umbral. Ver <see cref="GetFlaggedMatchmakingBeatmapIdsAsync"/>.
+        /// </summary>
+        Task FlagMatchmakingBeatmapAsync(uint poolId, int beatmapId);
+
+        /// <summary>
+        /// Los beatmap_id de una pool con <c>flagged_count &gt;= threshold</c> (mapas rotos a excluir).
+        /// </summary>
+        Task<int[]> GetFlaggedMatchmakingBeatmapIdsAsync(uint poolId, int threshold);
+
         Task<database_beatmap[]> GetMatchmakingGlobalPoolBeatmapsAsync(int rulesetId, int variant);
 
         Task<matchmaking_user_stats?> GetMatchmakingUserStatsAsync(int userId, uint poolId);
