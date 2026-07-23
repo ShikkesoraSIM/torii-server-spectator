@@ -335,7 +335,10 @@ namespace osu.Server.Spectator.Database
         public async Task OfflineUser(int userId)
         {
             await using var connection = await getConnectionAsync();
-            await connection.ExecuteAsync("UPDATE lazer_users SET last_visit = NOW() WHERE `id` = @userId", new { userId = userId });
+            // torii: al desconectar tambien apagamos is_online. La conexion la prende (ToggleUserPresenceAsync
+            // -> is_online=1) pero antes NUNCA se apagaba, asi que quedaba en 1 para siempre y el perfil mostraba
+            // "Currently online" a todos. CleanUpState ya borra el redis key de presence; espejamos eso en la columna.
+            await connection.ExecuteAsync("UPDATE lazer_users SET last_visit = NOW(), is_online = 0 WHERE `id` = @userId", new { userId = userId });
         }
 
         public async Task RemoveRoomParticipantAsync(MultiplayerRoom room, MultiplayerRoomUser user)
