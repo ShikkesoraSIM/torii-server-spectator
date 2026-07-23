@@ -144,5 +144,40 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
                 await multiplayerEventDispatcher.RelayRankedPlayCursorAsync(roomId.Value, Context.GetUserId(), x, y, Context.ConnectionId);
             }
         }
+
+        /// <summary>
+        /// torii DIBUJITO: chunk de trazo de la pizarra de ranked play, mismo esquema que el ghost
+        /// cursor (invocado por nombre, relay sin estado). Caps defensivos por si un cliente
+        /// modificado manda cualquier cosa: chunk acotado, arrays parejos y grosor clampeado.
+        /// </summary>
+        public async Task RankedPlayDrawStroke(int strokeId, float[] xs, float[] ys, int colour, float thickness, bool done)
+        {
+            if (xs.Length == 0 || xs.Length != ys.Length || xs.Length > 64)
+                return;
+
+            using (var userUsage = await GetOrCreateLocalUserState())
+            {
+                long? roomId = userUsage.Item?.CurrentRoomID;
+
+                if (roomId == null)
+                    return;
+
+                await multiplayerEventDispatcher.RelayRankedPlayDrawStrokeAsync(roomId.Value, Context.GetUserId(), strokeId, xs, ys, colour, Math.Clamp(thickness, 1f, 24f), done, Context.ConnectionId);
+            }
+        }
+
+        /// <summary>torii DIBUJITO: borrar todos los trazos propios (la basurita de la paleta).</summary>
+        public async Task RankedPlayDrawClear()
+        {
+            using (var userUsage = await GetOrCreateLocalUserState())
+            {
+                long? roomId = userUsage.Item?.CurrentRoomID;
+
+                if (roomId == null)
+                    return;
+
+                await multiplayerEventDispatcher.RelayRankedPlayDrawClearAsync(roomId.Value, Context.GetUserId(), Context.ConnectionId);
+            }
+        }
     }
 }
