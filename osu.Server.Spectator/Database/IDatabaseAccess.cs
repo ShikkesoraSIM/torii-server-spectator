@@ -264,7 +264,7 @@ namespace osu.Server.Spectator.Database
 
         Task<IEnumerable<SoloScore>> GetAllScoresForPlaylistItem(long roomId, long playlistItemId);
 
-        Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId);
+        Task<multiplayer_scores_high?> GetUserBestScoreAsync(long roomId, long playlistItemId, int userId);
 
         Task<int> GetUserRankInRoomAsync(long roomId, int userId);
 

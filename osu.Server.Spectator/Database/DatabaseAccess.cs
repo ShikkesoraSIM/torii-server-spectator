@@ -901,7 +901,7 @@ namespace osu.Server.Spectator.Database
         /// </summary>
         /// <param name="playlistItemId">The playlist item.</param>
 
-        public async Task<multiplayer_scores_high?> GetUserBestScoreAsync(long playlistItemId, int userId)
+        public async Task<multiplayer_scores_high?> GetUserBestScoreAsync(long roomId, long playlistItemId, int userId)
         {
             // Torii: g0v0 stores per-playlist-item best scores in `playlist_best_scores`
             // (column `playlist_id`) rather than osu-web's `multiplayer_scores_high`
@@ -923,9 +923,10 @@ namespace osu.Server.Spectator.Database
                 + "  `total_score` AS `total_score`, "
                 + "  `attempts` AS `attempts` "
                 + "FROM `playlist_best_scores` "
-                + "WHERE `playlist_id` = @playlistItemId AND `user_id` = @userId",
+                + "WHERE `room_id` = @roomId AND `playlist_id` = @playlistItemId AND `user_id` = @userId",
                 new
                 {
+                    roomId = roomId,
                     playlistItemId = playlistItemId,
                     userId = userId
                 });
