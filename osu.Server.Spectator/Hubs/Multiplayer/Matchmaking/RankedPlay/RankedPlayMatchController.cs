@@ -107,6 +107,7 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
         {
             MatchmakingService = matchmakingService;
             PoolId = pool.id;
+
             Ranked = pool.ranked;
 
             // Build the deck.
@@ -279,6 +280,14 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
             };
 
             await Stage.Enter();
+
+            // Al SALIR de la espera, la sala pasa a contar como partida en curso; y al
+            // entrar a Ended, deja de contar. Se avisa en el momento en vez de esperar
+            // la tanda de 5 segundos, que es justo cuando la gente esta mirando: dos
+            // personas se van de la cola y el punto verde tiene que aparecer ahi, no
+            // despues de que la pildora se vea apagada un rato.
+            if (stage == RankedPlayStage.RoundWarmup || stage == RankedPlayStage.Ended)
+                await MatchmakingService.PushLiveMatchCountAsync((int)PoolId);
         }
 
         /// <summary>
@@ -417,6 +426,9 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
             if (State.CurrentRound == 0)
             {
                 await MatchmakingService.RecordMatch((int)PoolId, State);
+            // El conteo de partidas en curso, ya: si se espera la tanda de 5
+            // segundos, el punto verde se queda prendido con la partida terminada.
+            await MatchmakingService.PushLiveMatchCountAsync((int)PoolId);
                 return;
             }
 
@@ -500,6 +512,9 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay
             }
 
             await MatchmakingService.RecordMatch((int)PoolId, State);
+            // El conteo de partidas en curso, ya: si se espera la tanda de 5
+            // segundos, el punto verde se queda prendido con la partida terminada.
+            await MatchmakingService.PushLiveMatchCountAsync((int)PoolId);
         }
 
         public MatchStartedEventDetail GetMatchDetails() => new MatchStartedEventDetail

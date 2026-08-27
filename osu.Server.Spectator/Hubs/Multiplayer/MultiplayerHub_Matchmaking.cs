@@ -45,6 +45,18 @@ namespace osu.Server.Spectator.Hubs.Multiplayer
             }
         }
 
+        /// <summary>
+        /// Las partidas de ranked play que estan pasando ahora, para el panel del toolbar.
+        /// </summary>
+        /// <remarks>
+        /// Por nombre de metodo (no esta en IMatchmakingServer) y devolviendo un string:
+        /// asi el agregado es aditivo y no toca el contrato messagepack del paquete
+        /// compartido, que es lo que obligaria a republicarlo y a atar cliente y server.
+        /// Mismo camino que uso el ghost cursor.
+        /// </remarks>
+        public Task<string> RankedPlayGetLiveMatches(int poolId)
+            => matchmakingQueueService.GetLiveMatchesJsonAsync(poolId);
+
         public async Task<MatchmakingJoinLobbyResponse> MatchmakingJoinLobbyWithParams(MatchmakingJoinLobbyRequest request)
         {
             using (var userUsage = await GetOrCreateLocalUserState())

@@ -2,6 +2,9 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Linq;
+using osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.RankedPlay;
+using osu.Game.Online.Multiplayer.MatchTypes.RankedPlay;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
@@ -75,6 +78,136 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
             this.loggerFactory = loggerFactory;
             logger = loggerFactory.CreateLogger(nameof(MatchmakingQueueBackgroundService));
         }
+
+        /// <summary>
+        /// Manda el conteo de partidas en curso YA, sin esperar la tanda de 5 segundos.
+        /// </summary>
+        /// <remarks>
+        /// Se llama cuando arranca o termina una partida. Sin esto, dos personas
+        /// desaparecian de la cola y el punto verde tardaba hasta cinco segundos en
+        /// aparecer: en el medio la pildora se veia apagada, como si se hubieran
+        /// esfumado. El momento en que la gente MIRA es justo ese.
+        /// </remarks>
+        public async Task PushLiveMatchCountAsync(int poolId)
+        {
+            try
+            {
+                await hub.Clients.Group($"matchmaking-lobby-users:{poolId}")
+                         .SendAsync("RankedPlayLiveMatchCount", poolId, contarPartidasEnCurso(poolId));
+            }
+            catch
+            {
+                // Es un aviso cosmetico. Si falla, la tanda de 5 segundos lo corrige.
+            }
+        }
+
+        private int contarPartidasEnCurso(int poolId)
+        {
+            int n = 0;
+
+            foreach ((_, ServerMultiplayerRoom? room) in rooms.GetAllEntities())
+            {
+                if (room?.MatchController is not RankedPlayMatchController rp)
+                    continue;
+
+                if (rp.PoolId != (uint)poolId)
+                    continue;
+
+                if (rp.State.Stage == RankedPlayStage.WaitForJoin || rp.State.Stage == RankedPlayStage.Ended)
+                    continue;
+
+                n++;
+            }
+
+            return n;
+        }
+
+        public async Task<string> GetLiveMatchesJsonAsync(int poolId)
+        {
+            var salidas = new List<object>();
+
+            // GetAllEntities da una foto sin tomar el lock de cada sala. Alcanza: esto
+            // alimenta un panel informativo, y una vida un frame vieja no le importa a
+            // nadie. Tomar el lock de cada sala para dibujar una barrita seria pelear
+            // con el hilo que las esta corriendo.
+            foreach ((long roomId, ServerMultiplayerRoom? room) in rooms.GetAllEntities())
+            {
+                if (room?.MatchController is not RankedPlayMatchController rp)
+                    continue;
+
+                if (rp.PoolId != (uint)poolId)
+                    continue;
+
+                // Una sala que todavia espera gente no es una partida: mostrarla como
+                // "en curso" haria que el panel prometa algo que no esta pasando.
+                if (rp.State.Stage == RankedPlayStage.WaitForJoin || rp.State.Stage == RankedPlayStage.Ended)
+                    continue;
+
+                var jugadores = new List<object>();
+
+                foreach ((int userId, RankedPlayUserInfo info) in rp.State.Users)
+                {
+                    MultiplayerRoomUser? u = room.Users.FirstOrDefault(x => x.UserID == userId);
+
+                    // El username puede venir vacio: la sala guarda el APIUser solo si
+                    // se hidrato, y en muchos casos no. Se manda vacio y lo resuelve el
+                    // cliente contra su cache de usuarios, que es donde ese dato vive de
+                    // verdad. Antes se inventaba "User 96", que es peor que no decir
+                    // nada: parece un nombre.
+                    jugadores.Add(new
+                    {
+                        user_id = userId,
+                        username = u?.User?.Username ?? string.Empty,
+                        life = info.Life,
+                        max_life = 1_000_000,
+                        rating = info.Rating,
+                    });
+                }
+
+                bool jugando = rp.State.Stage == RankedPlayStage.Gameplay;
+                int? beatmapId = null;
+
+                try
+                {
+                    // Solo el ID. El titulo lo resuelve el cliente, que ya tiene cache de
+                    // mapas: database_beatmap aca no trae artista ni titulo, y agregar un
+                    // JOIN para dibujar un renglon no vale la pena.
+                    beatmapId = rp.CurrentItem.BeatmapID;
+                }
+                catch
+                {
+                    // Sin item elegido todavia. El panel muestra la fase igual.
+                }
+
+                salidas.Add(new
+                {
+                    room_id = roomId,
+                    players = jugadores,
+                    stage = describirEtapa(rp.State.Stage),
+                    round = rp.State.CurrentRound,
+                    beatmap_id = beatmapId,
+                    in_gameplay = jugando,
+                });
+            }
+
+            return JsonConvert.SerializeObject(salidas);
+        }
+
+        /// <summary>
+        /// El nombre de la etapa como lo lee un jugador, no como lo escribe el enum.
+        /// </summary>
+        private static string describirEtapa(RankedPlayStage stage) => stage switch
+        {
+            RankedPlayStage.RoundWarmup => "Getting ready",
+            RankedPlayStage.CardDiscard => "Swapping cards",
+            RankedPlayStage.FinishCardDiscard => "Swapping cards",
+            RankedPlayStage.FinishCardPlay => "Picking a card",
+            RankedPlayStage.GameplayWarmup => "Getting ready",
+            RankedPlayStage.CardPlay => "Picking a card",
+            RankedPlayStage.Gameplay => "Playing",
+            RankedPlayStage.Results => "Round results",
+            _ => stage.ToString(),
+        };
 
         public Task RecordMatch(int poolId, MatchRoomState status)
         {
@@ -339,8 +472,22 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
             if (DateTimeOffset.Now - lastLobbyUpdateTime < lobby_update_rate)
                 return;
 
-            foreach ((_, MatchmakingLobby lobby) in poolLobbies)
+            foreach ((int poolId, MatchmakingLobby lobby) in poolLobbies)
+            {
                 await lobby.Update();
+
+                // El conteo de partidas en curso va PEGADO al update del lobby, en la
+                // misma tanda de cada 5 segundos, y no como stream propio: es un entero,
+                // los que lo reciben son los mismos, y abrir un segundo canal para eso
+                // seria duplicar trafico para no ganar nada.
+                //
+                // Por nombre de metodo asi es aditivo: un cliente que no lo conoce
+                // simplemente no lo escucha.
+                int enCurso = contarPartidasEnCurso(poolId);
+
+                await hub.Clients.Group($"matchmaking-lobby-users:{poolId}")
+                         .SendAsync("RankedPlayLiveMatchCount", poolId, enCurso);
+            }
 
             lastLobbyUpdateTime = DateTimeOffset.Now;
         }
