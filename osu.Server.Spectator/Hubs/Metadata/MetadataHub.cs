@@ -134,6 +134,32 @@ namespace osu.Server.Spectator.Hubs.Metadata
             return new BeatmapUpdates(updates.BeatmapSetIDs, updates.LastProcessedQueueID);
         }
 
+        /// <summary>
+        /// El fundador nunca figura desconectado: si no esta jugando de verdad, igual
+        /// se lo muestra presente.
+        /// </summary>
+        /// <remarks>
+        /// La presencia sintetica va con <c>Activity = null</c> A PROPOSITO. Un texto
+        /// propio ("Watching my Grasshoppers") tendria que viajar como un
+        /// <see cref="UserActivity"/> nuevo, y esa clase es parte del contrato
+        /// messagepack del paquete compartido: agregarle un tipo obliga a republicar el
+        /// paquete y a que cliente y server queden atados a la misma version, o sea que
+        /// cualquier cliente viejo se rompe al recibirlo. Asi el cable no cambia y el
+        /// texto lo pone el cliente, que es donde se dibuja igual.
+        ///
+        /// Por eso tambien "sin actividad" es la señal de que es la presencia sintetica:
+        /// cuando el fundador esta de verdad adentro del juego SIEMPRE manda una
+        /// actividad (eligiendo mapa, jugando, etc), asi que el cliente distingue los
+        /// dos casos sin ningun campo nuevo.
+        /// </remarks>
+        private const int founder_user_id = 3;
+
+        private static readonly UserPresence founder_idle_presence = new UserPresence
+        {
+            Status = UserStatus.Online,
+            Activity = null,
+        };
+
         public async Task BeginWatchingUserPresence()
         {
             foreach (var userState in GetAllStates())
@@ -151,6 +177,15 @@ namespace osu.Server.Spectator.Hubs.Metadata
                     string? clientName = toriiClientNameResolver.Resolve(userState.Value.VersionHash);
                     await hubContext.Clients.Client(Context.ConnectionId).SendAsync("UserClientNameUpdated", userState.Value.UserId, clientName);
                 }
+            }
+
+            // Si el fundador no estaba en la vuelta de arriba es porque no esta
+            // conectado. Se lo manda igual: el que abre la lista de online lo tiene que
+            // ver ahi, este jugando o no.
+            if (!GetAllStates().Any(state => state.Value.UserId == founder_user_id
+                                             && state.Value.UserStatus != UserStatus.Offline))
+            {
+                await Clients.Caller.UserPresenceUpdated(founder_user_id, founder_idle_presence);
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, ONLINE_PRESENCE_WATCHERS_GROUP);
@@ -343,9 +378,15 @@ namespace osu.Server.Spectator.Hubs.Metadata
             //      via the metadata hub.
             //   2. Update `lazer_users.last_visit` so profile pages render "last seen X ago"
             //      correctly even if the client crashes without firing UpdateStatus(Offline).
-            redis.GetDatabase().KeyDelete($"metadata:online:{state.Item.UserId}");
-            using (var db = databaseFactory.GetInstance())
-                await db.OfflineUser(state.Item.UserId);
+            // El fundador queda prendido tambien aca. Si se apagara solo en el juego, el
+            // perfil de la web diria "last seen hace un rato" mientras la lista de online
+            // lo muestra presente, que es peor que cualquiera de las dos cosas sola.
+            if (state.Item.UserId != founder_user_id)
+            {
+                redis.GetDatabase().KeyDelete($"metadata:online:{state.Item.UserId}");
+                using (var db = databaseFactory.GetInstance())
+                    await db.OfflineUser(state.Item.UserId);
+            }
 
             if (shouldBroadcastPresenceToOtherUsers(state.Item))
                 await broadcastUserPresenceUpdate(state.Item.UserId, null, state.Item.VersionHash);
@@ -364,6 +405,12 @@ namespace osu.Server.Spectator.Hubs.Metadata
         {
             // we never want appearing offline users to have their status broadcast to other clients.
             Debug.Assert(userPresence?.Status != UserStatus.Offline);
+
+            // El fundador no se apaga. Va aca y no en el desconectar porque por esta
+            // funcion pasan TODOS los avisos de presencia: cubrir un solo camino dejaria
+            // los otros mandando null y lo apagarian igual.
+            if (userId == founder_user_id && userPresence == null)
+                userPresence = founder_idle_presence;
 
             // Torii: alongside every presence update, broadcast the verified-Torii client name
             // (or null for vanilla / unverified clients). Receivers stash it in a side-table

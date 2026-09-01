@@ -16,7 +16,25 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         /// <summary>
         /// Records the current state of a match.
         /// </summary>
-        Task RecordMatch(int poolId, MatchRoomState state);
+        /// <summary>
+        /// Las partidas de ranked play en curso del pool, serializadas en JSON.
+        /// </summary>
+        /// <remarks>
+        /// Devuelve JSON y no un tipo del paquete compartido a proposito: meter una
+        /// clase nueva en el contrato messagepack obliga a republicar el paquete y a que
+        /// cliente y server queden atados a la misma version. Un string es aditivo.
+        ///
+        /// Se responde a PEDIDO, no se transmite: lo unico que lo necesita es alguien
+        /// que abrio el panel de ranked play, y son unos segundos al dia. Mandarselo a
+        /// todos los conectados seria hacer trabajar al juego de todo el mundo porque
+        /// hay dos personas jugando.
+        /// </remarks>
+        Task<string> GetLiveMatchesJsonAsync(int poolId);
+
+        /// <summary>Empuja el conteo de partidas en curso sin esperar la tanda periodica.</summary>
+        Task PushLiveMatchCountAsync(int poolId);
+
+        Task RecordMatch(int poolId, MatchRoomState status);
 
         /// <summary>
         /// Records the result of a beatmap, adjusting the beatmap's rating as appropriate.
