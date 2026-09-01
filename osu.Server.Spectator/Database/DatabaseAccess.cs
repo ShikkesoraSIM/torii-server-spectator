@@ -1233,6 +1233,18 @@ namespace osu.Server.Spectator.Database
             });
         }
 
+        public async Task<double?> GetComfortPickStarRatingAsync(int userId, int rulesetId)
+        {
+            var connection = await getConnectionAsync();
+
+            return await connection.QuerySingleOrDefaultAsync<double?>(
+                "SELECT `picked_star_rating` FROM `torii_comfort_picks` WHERE `user_id` = @UserId AND `ruleset_id` = @RulesetId ORDER BY `created_at` DESC LIMIT 1", new
+                {
+                    UserId = userId,
+                    RulesetId = rulesetId
+                });
+        }
+
         public async Task UpdateMatchmakingUserStatsAsync(matchmaking_user_stats stats)
         {
             var connection = await getConnectionAsync();

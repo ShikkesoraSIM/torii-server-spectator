@@ -322,5 +322,16 @@ namespace osu.Server.Spectator.Database
         /// <c>multiplayer_realtime_room_events</c>).
         /// </summary>
         Task LogRoomEventAsync(matchmaking_room_event ev);
+
+        /// <summary>
+        /// torii: el star rating que el jugador eligio para ranked play, o null si no eligio.
+        /// </summary>
+        /// <remarks>
+        /// Se toma el pick MAS NUEVO del ruleset en vez de filtrar por la season actual:
+        /// el id de season lo define g0v0 por config y el spectator no lo conoce. Pedirle
+        /// que lo adivine seria meter la misma constante en dos lados para que se
+        /// desincronicen despues; el ultimo pick es el vigente igual.
+        /// </remarks>
+        Task<double?> GetComfortPickStarRatingAsync(int userId, int rulesetId);
     }
 }

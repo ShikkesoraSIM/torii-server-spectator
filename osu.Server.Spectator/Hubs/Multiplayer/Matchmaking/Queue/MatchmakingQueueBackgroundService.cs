@@ -321,7 +321,10 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
 
                 // The user is added to the queue before the queue is added to the dictionary
                 // so that the periodic update doesn't discard the queue due to a lack of users.
-                MatchmakingQueue queue = new MatchmakingQueue(pool) { SearchTimeout = TimeSpan.FromMinutes(5) };
+                // EnforceStarSpread apagado a proposito: en un duelo elegis a quien
+                // desafias. El limite existe para que la COLA no te empareje con
+                // cualquiera, no para prohibirte jugar con un amigo de otra dificultad.
+                MatchmakingQueue queue = new MatchmakingQueue(pool) { SearchTimeout = TimeSpan.FromMinutes(5), EnforceStarSpread = false };
                 MatchmakingQueueUser user = await createUserAsync(state, pool);
                 user.QueueBanStartTime = DateTimeOffset.MinValue;
                 MatchmakingQueueUpdateBundle updateBundle = queue.Add(user);
@@ -671,10 +674,23 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
                     });
                 }
 
+                // torii: sin dificultad elegida no se entra. El picker vivia solo en la
+                // pantalla de ranked play, asi que el atajo del toolbar lo salteaba: el
+                // que entraba por ahi quedaba emparejado SOLO por elo, contra cualquier
+                // dificultad. Asi termina alguien de 5.4 jugando contra alguien de 7.5.
+                //
+                // El cliente nuevo lo pide antes y con una ventana propia; esto es el
+                // porton, para que no dependa de que el cliente se porte bien.
+                double? comfortPick = await db.GetComfortPickStarRatingAsync(state.UserId, pool.ruleset_id);
+
+                if (comfortPick == null)
+                    throw new InvalidStateException("You need to set your Star Rating first.");
+
                 return new MatchmakingQueueUser(state.ConnectionId)
                 {
                     UserId = state.UserId,
                     Rating = stats.EloData.Rating,
+                    StarRating = comfortPick,
                     QueueBanStartTime = memoryCache.Get<DateTimeOffset?>(queue_ban_start_time(state.UserId)) ?? DateTimeOffset.MinValue
                 };
             }

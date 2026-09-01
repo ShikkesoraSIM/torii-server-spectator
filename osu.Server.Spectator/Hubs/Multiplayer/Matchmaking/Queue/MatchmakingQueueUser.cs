@@ -22,6 +22,25 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         public int UserId { get; init; }
 
         /// <summary>
+        /// torii: el star rating que el jugador eligio para ranked play (su comfort pick).
+        /// </summary>
+        /// <remarks>
+        /// No es lo mismo que <see cref="Rating"/>. El elo mide QUE TAN BIEN jugas y se
+        /// gana partida a partida; esto es en QUE DIFICULTAD queres jugar, y lo elegis a
+        /// mano una vez por season. Dos personas pueden tener el mismo elo y jugar mapas
+        /// que no tienen nada que ver.
+        ///
+        /// Por eso el elo solo no alcanza para armar un match decente: emparejar por elo
+        /// a alguien de 5.4 con alguien de 7.5 da una partida que ninguno de los dos
+        /// queria. Se mide aparte y se limita aparte (ver MatchmakingQueue).
+        ///
+        /// null = el jugador no eligio todavia. No deberia pasar (AddToQueueAsync lo
+        /// exige antes de dejarte entrar), pero si pasara, el filtro lo deja pasar en vez
+        /// de dejarlo sin match para siempre.
+        /// </remarks>
+        public double? StarRating { get; set; }
+
+        /// <summary>
         /// The time at which this user started searching for a match.
         /// </summary>
         public DateTimeOffset SearchStartTime { get; set; }

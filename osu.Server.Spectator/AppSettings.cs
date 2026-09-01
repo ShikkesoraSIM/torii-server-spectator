@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Globalization;
 using System.Linq;
 
 namespace osu.Server.Spectator
@@ -167,6 +168,26 @@ namespace osu.Server.Spectator
         public static int MatchmakingPoolSize { get; } = 50;
 
         /// <summary>
+        /// torii: diferencia maxima de star rating (comfort pick) tolerada dentro de un
+        /// match. Arriba de esto los jugadores no se emparejan nunca, por mucho que
+        /// esperen y por parecido que sea su elo.
+        /// </summary>
+        /// <remarks>
+        /// 1.3 sale de mirar las partidas jugadas: arriba de esa diferencia, dos de cada
+        /// tres jugadores del lado BAJO no vuelven a tirar cola nunca mas (33% vs 92% del
+        /// lado alto, y 89-95% en los matches parejos). O sea el match desparejo no es un
+        /// match de mas, es un jugador de menos.
+        ///
+        /// Cuesta un 14% de los emparejamientos y no deja a nadie sin cola: con los picks
+        /// de hoy, el de 7.5 tiene 40 personas adentro del rango y el grueso entre 39 y
+        /// 58. Los unicos que quedan aislados son tres cuentas del extremo bajo, que son
+        /// justo las que hoy generan los abismos de 6 estrellas.
+        ///
+        /// En 0 el limite queda apagado.
+        /// </remarks>
+        public static double MatchmakingMaxStarSpread { get; set; } = 1.3;
+
+        /// <summary>
         /// Torii: when true, replays are stored regardless of beatmap rank
         /// status (osu-web only stores them for ranked..loved). g0v0 needs
         /// this on so leaderboards on graveyarded/qualified maps still
@@ -298,6 +319,10 @@ namespace osu.Server.Spectator
             MatchmakingPoolSize = int.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_POOL_SIZE"), out int mmPoolSize)
                 ? mmPoolSize
                 : MatchmakingPoolSize;
+
+            MatchmakingMaxStarSpread = double.TryParse(Environment.GetEnvironmentVariable("MATCHMAKING_MAX_STAR_SPREAD"), NumberStyles.Float, CultureInfo.InvariantCulture, out double mmStarSpread)
+                ? mmStarSpread
+                : MatchmakingMaxStarSpread;
 
             // Path 1B per-phase HTTP-DAO migration flags. All default false
             // (legacy SQL) until the corresponding g0v0 endpoints land and

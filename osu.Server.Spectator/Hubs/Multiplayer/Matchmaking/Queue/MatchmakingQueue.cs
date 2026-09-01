@@ -37,6 +37,12 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
         public TimeSpan BanDuration { get; set; } = AppSettings.MatchmakingQueueBanDuration;
 
         /// <summary>
+        /// torii: si esta cola respeta el limite de diferencia de star rating.
+        /// Prendido para la cola abierta, apagado para los duelos.
+        /// </summary>
+        public bool EnforceStarSpread { get; set; } = true;
+
+        /// <summary>
         /// All users active in the matchmaking queue.
         /// </summary>
         private readonly HashSet<MatchmakingQueueUser> matchmakingUsers = new HashSet<MatchmakingQueueUser>();
@@ -369,10 +375,65 @@ namespace osu.Server.Spectator.Hubs.Multiplayer.Matchmaking.Queue
                 if (distance > searchRadius)
                     break;
 
-                result.Add(leftDistance < rightDistance ? users[leftIndex--] : users[rightIndex++]);
+                bool tomarIzquierda = leftDistance < rightDistance;
+                MatchmakingQueueUser candidato = tomarIzquierda ? users[leftIndex] : users[rightIndex];
+
+                // torii: el elo dice si juegan PAREJO, no si juegan LO MISMO. Al que
+                // quedo lejos en estrellas se lo SALTEA y se sigue buscando, en vez de
+                // cortar aca: un poco mas alla puede haber alguien con el elo apenas
+                // peor y la dificultad justa, que es el match que los dos querian.
+                if (starSpreadExceeded(candidato, result))
+                {
+                    if (tomarIzquierda)
+                        leftIndex--;
+                    else
+                        rightIndex++;
+
+                    continue;
+                }
+
+                result.Add(candidato);
+
+                if (tomarIzquierda)
+                    leftIndex--;
+                else
+                    rightIndex++;
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// torii: si meter a <paramref name="candidate"/> dejaria a alguien del grupo con
+        /// mas de <see cref="AppSettings.MatchmakingMaxStarSpread"/> estrellas de diferencia.
+        /// </summary>
+        /// <remarks>
+        /// Se compara contra TODO el grupo y no solo contra el que disparo la busqueda:
+        /// en lobbies de mas de dos, dos jugadores pueden estar los dos cerca del pivote
+        /// y lejisimos entre si. Lo que decide si la partida se puede jugar es el spread
+        /// de la SALA, no la distancia al pivote.
+        ///
+        /// Si a alguno le falta el pick no se bloquea. Es un dato que deberia estar
+        /// siempre (sin elegir dificultad ya no se entra a la cola), pero dejar a alguien
+        /// sin match para siempre por una fila que falta es peor que un match desparejo.
+        /// </remarks>
+        private bool starSpreadExceeded(MatchmakingQueueUser candidate, IEnumerable<MatchmakingQueueUser> group)
+        {
+            double limite = AppSettings.MatchmakingMaxStarSpread;
+
+            if (!EnforceStarSpread || limite <= 0 || candidate.StarRating == null)
+                return false;
+
+            foreach (MatchmakingQueueUser otro in group)
+            {
+                if (otro.StarRating == null)
+                    continue;
+
+                if (Math.Abs(otro.StarRating.Value - candidate.StarRating.Value) > limite)
+                    return true;
+            }
+
+            return false;
         }
     }
 }
