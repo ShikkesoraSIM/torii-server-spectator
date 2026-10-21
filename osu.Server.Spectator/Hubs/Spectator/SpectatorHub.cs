@@ -61,7 +61,11 @@ namespace osu.Server.Spectator.Hubs.Spectator
             redisDatabase = redis.GetDatabase();
         }
 
-        public async Task BeginPlaySession(long? scoreToken, SpectatorState state)
+        public Task BeginPlaySession(long? scoreToken, SpectatorState state) => beginPlaySession(scoreToken, state, false);
+
+        public Task BeginPlaySessionV2(long? scoreToken, SpectatorState state) => beginPlaySession(scoreToken, state, true);
+
+        private async Task beginPlaySession(long? scoreToken, SpectatorState state, bool usesV2)
         {
             int userId = Context.GetUserId();
 
@@ -69,14 +73,14 @@ namespace osu.Server.Spectator.Hubs.Spectator
             {
                 var clientState = (usage.Item ??= new SpectatorClientState(Context.ConnectionId, userId));
 
-                if (clientState.State != null)
-                {
-                    // Previous session never received EndPlaySession call.
-                    // Should probably be handled in some way.
-                }
+                if (usesV2 && clientState.UsesV2 && scoreToken != null && clientState.ScoreToken == scoreToken && clientState.Score != null)
+                    return;
 
                 clientState.State = state;
                 clientState.ScoreToken = scoreToken;
+                clientState.UsesV2 = usesV2;
+                clientState.Beatmap = null;
+                clientState.Score = null;
 
                 if (state.RulesetID == null)
                     return;
@@ -124,20 +128,28 @@ namespace osu.Server.Spectator.Hubs.Spectator
                         }
                     };
                 }
+                await Clients.Group(GetGroupId(userId)).UserBeganPlaying(userId, state);
             }
-
-            await Clients.Group(GetGroupId(userId)).UserBeganPlaying(userId, state);
         }
 
-        public async Task SendFrameData(FrameDataBundle data)
+        public Task SendFrameData(FrameDataBundle data) => sendFrameData(null, data, false);
+
+        public Task SendFrameDataV2(long? scoreToken, FrameDataBundle data) => sendFrameData(scoreToken, data, true);
+
+        private async Task sendFrameData(long? scoreToken, FrameDataBundle data, bool usesV2)
         {
             using (var usage = await GetOrCreateLocalUserState())
             {
-                var score = usage.Item?.Score;
+                var clientState = usage.Item;
+                var score = clientState?.Score;
 
                 // Score may be null if the BeginPlaySession call failed but the client is still sending frame data.
                 // For now it's safe to drop these frames.
                 if (score == null)
+                    return;
+
+                // torii: el check va bajo el lock, asi un paquete viejo no toca otra partida.
+                if (clientState!.UsesV2 != usesV2 || (usesV2 && clientState.ScoreToken != scoreToken))
                     return;
 
                 score.ScoreInfo.Accuracy = data.Header.Accuracy;
@@ -157,50 +169,61 @@ namespace osu.Server.Spectator.Hubs.Spectator
             }
         }
 
-        public async Task EndPlaySession(SpectatorState state)
+        public Task EndPlaySession(SpectatorState state) => finishPlaySession(null, state, false);
+
+        public Task EndPlaySessionV2(long? scoreToken, SpectatedUserState finalState) => finishPlaySession(scoreToken, new SpectatorState { State = finalState }, true);
+
+        private async Task finishPlaySession(long? expectedToken, SpectatorState state, bool usesV2)
         {
             using (var usage = await GetOrCreateLocalUserState())
             {
+                var clientState = usage.Item;
+                if (clientState?.State == null || clientState.UsesV2 != usesV2 || (usesV2 && clientState.ScoreToken != expectedToken))
+                    return;
+
+                if (usesV2)
+                {
+                    state.BeatmapID = clientState.State.BeatmapID;
+                    state.RulesetID = clientState.State.RulesetID;
+                    state.Mods = clientState.State.Mods;
+                    state.MaximumStatistics = clientState.State.MaximumStatistics;
+                    if (state.State != SpectatedUserState.Passed && state.State != SpectatedUserState.Failed && state.State != SpectatedUserState.Quit)
+                        state.State = SpectatedUserState.Quit;
+                }
+
                 try
                 {
-                    Score? score = usage.Item?.Score;
-                    long? scoreToken = usage.Item?.ScoreToken;
+                    Score? score = clientState.Score;
+                    long? scoreToken = clientState.ScoreToken;
 
-                    // Score may be null if the BeginPlaySession call failed but the client is still sending frame data.
-                    // For now it's safe to drop these frames.
-                    // Note that this *intentionally* skips the `endPlaySession()` call at the end of method.
-                    if (score == null || scoreToken == null || usage.Item?.Beatmap == null)
-                        return;
+                    // torii: V1 conserva su cierre viejo; V2 avisa el fin aun sin token/replay.
+                    if (score == null || scoreToken == null || clientState.Beatmap == null)
+                    {
+                        if (!usesV2)
+                            return;
+                    }
+                    else
+                    {
+                        await processScore(clientState);
 
-                    await processScore(usage.Item!);
-
-                    // Torii: M1PP-parity tracking that upstream doesn't do.
-                    //  - processFailtime updates the per-beatmap fail/exit
-                    //    histogram in `failtime` (read by song-select to
-                    //    draw the red bars on the timeline).
-                    //  - editPlayTime corrects the per-mode playtime that
-                    //    g0v0 optimistically counted on play start: the
-                    //    submission flow assumes the user finishes the map,
-                    //    so on a quit/fail we have to rewind by
-                    //    (assumed_runtime - actual_exit_seconds).
-                    int exitTime = (int)Math.Round((score.Replay.Frames.LastOrDefault()?.Time ?? 0) / 1000);
-                    if (state.State == SpectatedUserState.Failed || state.State == SpectatedUserState.Quit)
-                        await processFailtime(usage.Item!, exitTime, state);
-                    await editPlayTime(usage.Item!, exitTime);
+                        // torii: ambos protocolos conservan failtime y el ajuste de playtime.
+                        int exitTime = (int)Math.Round((score.Replay.Frames.LastOrDefault()?.Time ?? 0) / 1000);
+                        if (state.State == SpectatedUserState.Failed || state.State == SpectatedUserState.Quit)
+                            await processFailtime(clientState, exitTime, state);
+                        await editPlayTime(clientState, exitTime);
+                    }
                 }
                 finally
                 {
-                    if (usage.Item != null)
-                    {
-                        usage.Item.State = null;
-                        usage.Item.Beatmap = null;
-                        usage.Item.Score = null;
-                        usage.Item.ScoreToken = null;
-                    }
+                    clientState.State = null;
+                    clientState.Beatmap = null;
+                    clientState.Score = null;
+                    clientState.ScoreToken = null;
+                    clientState.UsesV2 = false;
                 }
-            }
 
-            await endPlaySession(Context.GetUserId(), state);
+                await endPlaySession(Context.GetUserId(), state);
+            }
         }
 
         private async Task processScore(SpectatorClientState item)

@@ -33,6 +33,8 @@ namespace osu.Server.Spectator.Hubs.Spectator
         /// </summary>
         public long? ScoreToken;
 
+        public bool UsesV2;
+
         /// <summary>
         /// The list of IDs of users that this client is currently watching.
         /// </summary>

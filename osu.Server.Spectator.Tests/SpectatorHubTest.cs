@@ -27,7 +27,7 @@ using Xunit;
 
 namespace osu.Server.Spectator.Tests
 {
-    public class SpectatorHubTest
+    public partial class SpectatorHubTest : IDisposable
     {
         private readonly SpectatorHub hub;
 
@@ -47,9 +47,11 @@ namespace osu.Server.Spectator.Tests
             mockDatabase = new Mock<IDatabaseAccess>();
             mockDatabase.Setup(db => db.GetUsernameAsync(streamer_id)).ReturnsAsync(() => streamer_username);
 
-            mockDatabase.Setup(db => db.GetBeatmapAsync(It.IsAny<int>()))
+            mockDatabase.Setup(db => db.GetBeatmapOrFetchAsync(It.IsAny<int>()))
                         .ReturnsAsync((int id) => new database_beatmap
                         {
+                            beatmap_id = id,
+                            total_length = 100,
                             approved = BeatmapOnlineStatus.Ranked,
                             checksum = (id == beatmap_id ? "d2a97fb2fa4529a5e857fe0466dc1daf" : string.Empty)
                         });
@@ -468,7 +470,7 @@ namespace osu.Server.Spectator.Tests
                 passed = true
             }));
 
-            mockDatabase.Setup(db => db.GetBeatmapAsync(beatmap_id)).Returns(Task.FromResult(new database_beatmap
+            mockDatabase.Setup(db => db.GetBeatmapOrFetchAsync(beatmap_id)).Returns(Task.FromResult(new database_beatmap
             {
                 approved = status,
                 checksum = "checksum"
@@ -554,7 +556,7 @@ namespace osu.Server.Spectator.Tests
                 passed = true
             }));
 
-            mockDatabase.Setup(db => db.GetBeatmapAsync(beatmap_id)).Returns(Task.FromResult(new database_beatmap
+            mockDatabase.Setup(db => db.GetBeatmapOrFetchAsync(beatmap_id)).Returns(Task.FromResult(new database_beatmap
             {
                 approved = BeatmapOnlineStatus.Ranked,
                 checksum = "checksum"
@@ -706,5 +708,7 @@ namespace osu.Server.Spectator.Tests
                 await Task.Delay(1000);
             }
         }
+
+        public void Dispose() => scoreUploader.Dispose();
     }
 }
