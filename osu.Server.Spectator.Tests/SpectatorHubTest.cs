@@ -21,6 +21,7 @@ using osu.Server.Spectator.Database.Models;
 using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Hubs;
 using osu.Server.Spectator.Hubs.Spectator;
+using osu.Server.Spectator.Services;
 using osu.Server.Spectator.Storage;
 using StackExchange.Redis;
 using Xunit;
@@ -35,6 +36,7 @@ namespace osu.Server.Spectator.Tests
         private const string streamer_username = "user";
         private const int beatmap_id = 88;
         private const int watcher_id = 8000;
+        private const int silent_watcher_id = 8001;
 
         private readonly ScoreUploader scoreUploader;
         private readonly Mock<IScoreStorage> mockScoreStorage;
@@ -71,7 +73,8 @@ namespace osu.Server.Spectator.Tests
             var redis = new Mock<IConnectionMultiplexer>();
             redis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(new Mock<IDatabase>().Object);
 
-            hub = new SpectatorHub(loggerFactory.Object, clientStates, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object, redis.Object);
+            hub = new SpectatorHub(loggerFactory.Object, clientStates, databaseFactory.Object, scoreUploader, mockScoreProcessedSubscriber.Object, redis.Object,
+                new SilentSpectatorPolicy(silent_watcher_id.ToString()));
         }
 
         [Fact]

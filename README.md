@@ -10,6 +10,15 @@ To deploy this as part of a full osu! server stack deployment, [this wiki page](
 
 For advanced testing purposes.
 
+`SILENT_SPECTATOR_USER_IDS` is an optional comma-separated allow-list of positive
+account IDs. It is empty (disabled) by default. Listed accounts receive the normal
+spectator stream without join/leave notifications to the player; their public
+spectating activity is hidden from online and friend presence, including initial
+snapshots. Other activities and their own presence are unchanged. Connections and
+silent watch actions remain in server logs. Names are not used for authorization.
+Set it on the spectator service and restart to apply; no client update is needed.
+This does not hide multiplayer lobby membership or external Discord rich presence.
+
 | Envvar name                          | Description                                                                                                                                                                                                                                    | Default value                   |
 |:-------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------------------------------|
 | `SAVE_REPLAYS`                       | Whether to save received replay frames from clients to replay files. `1` to enable, any other value to disable.                                                                                                                                | `""` (disabled)                 |

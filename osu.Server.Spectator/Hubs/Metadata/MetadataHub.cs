@@ -33,6 +33,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
         private readonly IDatabaseFactory databaseFactory;
         private readonly IDailyChallengeUpdater dailyChallengeUpdater;
         private readonly IScoreProcessedSubscriber scoreProcessedSubscriber;
+        private readonly SilentSpectatorPolicy silentSpectators;
 
         // Torii: cached map of "version hash → friendly client name (e.g. 'Torii Lazer')".
         // Resolved on every presence broadcast so other lazer clients can render a verified
@@ -67,7 +68,8 @@ namespace osu.Server.Spectator.Hubs.Metadata
             IScoreProcessedSubscriber scoreProcessedSubscriber,
             ToriiClientNameResolver toriiClientNameResolver,
             IConnectionMultiplexer redis,
-            IHubContext<MetadataHub> hubContext)
+            IHubContext<MetadataHub> hubContext,
+            SilentSpectatorPolicy silentSpectators)
             : base(loggerFactory, userStates)
         {
             this.cache = cache;
@@ -77,6 +79,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
             this.toriiClientNameResolver = toriiClientNameResolver;
             this.redis = redis;
             this.hubContext = hubContext;
+            this.silentSpectators = silentSpectators;
         }
 
         public override async Task OnConnectedAsync()
@@ -166,7 +169,8 @@ namespace osu.Server.Spectator.Hubs.Metadata
             {
                 if (userState.Value.UserStatus != UserStatus.Offline)
                 {
-                    await Clients.Caller.UserPresenceUpdated(userState.Value.UserId, userState.Value.ToUserPresence());
+                    await Clients.Caller.UserPresenceUpdated(userState.Value.UserId,
+                        silentSpectators.GetPublicPresence(userState.Value.UserId, userState.Value.ToUserPresence()));
 
                     // Torii: also seed the caller's verified-client-name table for everyone
                     // currently online. Without this, the caller wouldn't see badges until
@@ -359,7 +363,7 @@ namespace osu.Server.Spectator.Hubs.Metadata
                 using (var friendUsage = await TryGetStateFromUser(friendId))
                 {
                     if (friendUsage?.Item != null && shouldBroadcastPresenceToOtherUsers(friendUsage.Item))
-                        await Clients.Caller.FriendPresenceUpdated(friendId, friendUsage.Item.ToUserPresence());
+                        await Clients.Caller.FriendPresenceUpdated(friendId, silentSpectators.GetPublicPresence(friendId, friendUsage.Item.ToUserPresence()));
                 }
             }
 
@@ -411,6 +415,8 @@ namespace osu.Server.Spectator.Hubs.Metadata
             // los otros mandando null y lo apagarian igual.
             if (userId == founder_user_id && userPresence == null)
                 userPresence = founder_idle_presence;
+
+            userPresence = silentSpectators.GetPublicPresence(userId, userPresence);
 
             // Torii: alongside every presence update, broadcast the verified-Torii client name
             // (or null for vanilla / unverified clients). Receivers stash it in a side-table

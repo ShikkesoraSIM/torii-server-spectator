@@ -20,6 +20,7 @@ using osu.Server.Spectator.Database.Models;
 using osu.Server.Spectator.Entities;
 using osu.Server.Spectator.Extensions;
 using osu.Server.Spectator.Helpers;
+using osu.Server.Spectator.Services;
 using StackExchange.Redis;
 
 namespace osu.Server.Spectator.Hubs.Spectator
@@ -40,6 +41,7 @@ namespace osu.Server.Spectator.Hubs.Spectator
         private readonly IDatabaseFactory databaseFactory;
         private readonly ScoreUploader scoreUploader;
         private readonly IScoreProcessedSubscriber scoreProcessedSubscriber;
+        private readonly SilentSpectatorPolicy silentSpectators;
         // Torii: M1PP injected redis here so it could pop the
         // `score:existed_time:{token}` stream g0v0 publishes when a play
         // begins. Without it, editPlayTime can't compute a delta and the
@@ -52,13 +54,15 @@ namespace osu.Server.Spectator.Hubs.Spectator
             IDatabaseFactory databaseFactory,
             ScoreUploader scoreUploader,
             IScoreProcessedSubscriber scoreProcessedSubscriber,
-            IConnectionMultiplexer redis)
+            IConnectionMultiplexer redis,
+            SilentSpectatorPolicy silentSpectators)
             : base(loggerFactory, users)
         {
             this.databaseFactory = databaseFactory;
             this.scoreUploader = scoreUploader;
             this.scoreProcessedSubscriber = scoreProcessedSubscriber;
             redisDatabase = redis.GetDatabase();
+            this.silentSpectators = silentSpectators;
         }
 
         public Task BeginPlaySession(long? scoreToken, SpectatorState state) => beginPlaySession(scoreToken, state, false);
@@ -286,6 +290,12 @@ namespace osu.Server.Spectator.Hubs.Spectator
             await Groups.AddToGroupAsync(Context.ConnectionId, GetGroupId(userId));
 
             int watcherId = Context.GetUserId();
+            if (silentSpectators.IsSilent(watcherId))
+            {
+                Log($"Silent watch started for {userId}");
+                return;
+            }
+
             string? watcherUsername;
             using (var db = databaseFactory.GetInstance())
                 watcherUsername = await db.GetUsernameAsync(watcherId);
@@ -314,6 +324,12 @@ namespace osu.Server.Spectator.Hubs.Spectator
 
             int watcherId = Context.GetUserId();
 
+            if (silentSpectators.IsSilent(watcherId))
+            {
+                Log($"Silent watch ended for {userId}");
+                return;
+            }
+
             await Clients.User(userId.ToString()).UserEndedWatching(watcherId);
         }
 
@@ -325,7 +341,12 @@ namespace osu.Server.Spectator.Hubs.Spectator
                 await endPlaySession(state.Item.UserId, state.Item.State);
 
             foreach (int watchedUserId in state.Item.WatchedUsers)
-                await Clients.User(watchedUserId.ToString()).UserEndedWatching(state.Item.UserId);
+            {
+                if (silentSpectators.IsSilent(state.Item.UserId))
+                    Log($"Silent watch cleaned up for {watchedUserId}");
+                else
+                    await Clients.User(watchedUserId.ToString()).UserEndedWatching(state.Item.UserId);
+            }
 
             await base.CleanUpState(state);
         }

@@ -65,6 +65,7 @@ namespace osu.Server.Spectator
         public static bool TrackBuildUserCounts { get; set; }
         public static bool ClientCheckVersion { get; }
         public static int[] ClientCheckVersionExemptGroups { get; }
+        public static string SilentSpectatorUserIds { get; } = string.Empty;
 
         public static int ServerPort { get; set; } = 80;
         public static string RedisHost { get; } = "localhost";
@@ -252,6 +253,7 @@ namespace osu.Server.Spectator
             ReplaysBucket = Environment.GetEnvironmentVariable("REPLAYS_BUCKET") ?? ReplaysBucket;
             TrackBuildUserCounts = parseBool(Environment.GetEnvironmentVariable("TRACK_BUILD_USER_COUNTS"), TrackBuildUserCounts);
             ClientCheckVersion = parseBool(Environment.GetEnvironmentVariable("CLIENT_CHECK_VERSION"), ClientCheckVersion);
+            SilentSpectatorUserIds = Environment.GetEnvironmentVariable("SILENT_SPECTATOR_USER_IDS") ?? SilentSpectatorUserIds;
 
             ClientCheckVersionExemptGroups = Environment.GetEnvironmentVariable("CLIENT_CHECK_VERSION_EXEMPT_GROUPS")?.Split(',')
                                                         .Select(id =>

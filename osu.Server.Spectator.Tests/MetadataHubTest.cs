@@ -21,9 +21,10 @@ using Xunit;
 
 namespace osu.Server.Spectator.Tests
 {
-    public class MetadataHubTest
+    public partial class MetadataHubTest
     {
         private const int user_id = 55;
+        private const int silent_user_id = 77;
 
         private readonly MetadataHub hub;
         private readonly EntityStore<MetadataClientState> userStates;
@@ -48,6 +49,13 @@ namespace osu.Server.Spectator.Tests
             var redis = new Mock<IConnectionMultiplexer>();
             redis.Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(new Mock<IDatabase>().Object);
 
+            var rawClient = new Mock<ISingleClientProxy>();
+            var rawClients = new Mock<IHubClients>();
+            rawClients.Setup(clients => clients.Client(It.IsAny<string>())).Returns(rawClient.Object);
+            rawClients.Setup(clients => clients.Group(It.IsAny<string>())).Returns(rawClient.Object);
+            var hubContext = new Mock<IHubContext<MetadataHub>>();
+            hubContext.Setup(context => context.Clients).Returns(rawClients.Object);
+
             hub = new MetadataHub(
                 loggerFactoryMock.Object,
                 new MemoryCache(new MemoryCacheOptions()),
@@ -57,7 +65,8 @@ namespace osu.Server.Spectator.Tests
                 new Mock<IScoreProcessedSubscriber>().Object,
                 new ToriiClientNameResolver(new Mock<IHttpClientFactory>().Object, new Mock<ILogger<ToriiClientNameResolver>>().Object),
                 redis.Object,
-                new Mock<IHubContext<MetadataHub>>().Object);
+                hubContext.Object,
+                new SilentSpectatorPolicy(silent_user_id.ToString()));
 
             mockWatchersGroup = new Mock<IMetadataClient>();
             mockCaller = new Mock<IMetadataClient>();
@@ -227,7 +236,8 @@ namespace osu.Server.Spectator.Tests
                 mgr => mgr.AddToGroupAsync(It.IsAny<string>(), MetadataHub.ONLINE_PRESENCE_WATCHERS_GROUP, It.IsAny<CancellationToken>()),
                 Times.Once);
             // verify that the caller got the initial data update.
-            mockCaller.Verify(caller => caller.UserPresenceUpdated(It.IsAny<int>(), It.IsAny<UserPresence>()), Times.Exactly(2));
+            mockCaller.Verify(caller => caller.UserPresenceUpdated(It.Is<int>(id => id == 100 || id == 101), It.IsAny<UserPresence>()), Times.Exactly(2));
+            mockCaller.Verify(caller => caller.UserPresenceUpdated(3, It.Is<UserPresence>(p => p.Status == UserStatus.Online && p.Activity == null)), Times.Once);
 
             await hub.EndWatchingUserPresence();
             mockGroupManager.Verify(

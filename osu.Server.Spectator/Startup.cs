@@ -19,6 +19,7 @@ using osu.Server.Spectator.Hubs.Metadata;
 using osu.Server.Spectator.Hubs.Multiplayer;
 using osu.Server.Spectator.Hubs.Referee;
 using osu.Server.Spectator.Hubs.Spectator;
+using osu.Server.Spectator.Services;
 
 namespace osu.Server.Spectator
 {
@@ -63,6 +64,8 @@ namespace osu.Server.Spectator
                     .AddMemoryCache();
 
             services.AddDistributedMemoryCache(); // replace with redis
+
+            services.AddSingleton(new SilentSpectatorPolicy(AppSettings.SilentSpectatorUserIds));
 
             services.AddLogging(logging =>
             {
